@@ -1,0 +1,24 @@
+[project]
+name = "jalon"
+version = "0.0.0"
+description = "Carries a piece of work from a scoped GitHub issue to a merged, deployed change: thin commands over gh and git."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.15"
+# No runtime dependency, so that a pinned version is a pinned behaviour.
+dependencies = []
+
+[project.scripts]
+jalon = "jalon.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=9.2", "pytest-xdist>=3.8"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
