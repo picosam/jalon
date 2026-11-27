@@ -187,7 +187,7 @@ def test_park_close_leaves_the_replaced_records_deletion_to_git(outside, alone, 
     done = run("jalon", "park", "close", "9", "--record-file", "record.md", "--name", "which-option-again",
                "--replaces", "7")
     if case in ("modified", "staged", "untracked"):
-        assert done.returncode == 1 and "git did not remove the record of #7, so nothing changes" in done.stderr
+        assert done.returncode == 1 and "git did not remove the record of #7" in done.stderr
         assert files_under(alone) == before
     else:
         assert done.returncode == 0, done.stderr

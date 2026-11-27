@@ -168,7 +168,8 @@ recorded, then the words in double quotes) and `## Would overturn`, and run:
 
 Add `--replaces <m>` when it replaces an earlier decision, whose record must
 be committed first: git removes it, by `git rm` on `decisions/<m>-*.md`, and
-shows what it removed. When git refuses, nothing changes: read what it says.
+shows what it removed. If git refuses, jalon stops and writes no record: read
+what git says.
 The removal is left staged, for the commit that adds the new record. The command refuses a `--repo` that is not this
 checkout's, reads the issue from that repository and refuses one GitHub does
 not show closed as completed; it changes nothing on GitHub. It writes

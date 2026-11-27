@@ -346,7 +346,7 @@ def test_a_decision_not_committed_as_it_stands_cannot_be_replaced(gh, checkout, 
         subprocess.run(["git", "add", "decisions/7-which-option.md"], cwd=checkout, check=True)
     words = old.read_bytes()
     ruled(gh, 9)
-    with pytest.raises(Refused, match="git did not remove the record of #7, so nothing changes"):
+    with pytest.raises(Refused, match="git did not remove the record of #7"):
         park.close(9, record(checkout), "which-option-again", replaces=7)
     assert old.read_bytes() == words and not (checkout / "decisions/9-which-option-again.md").exists()
     assert [row["number"] for row in rows(checkout)] == [7]

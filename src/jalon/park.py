@@ -220,8 +220,8 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
     on `decisions/<replaces>-*.md`, before anything is written, and git's own
     lines say what went. The path comes from the decision's number, never from
     the index: every file of that name is taken for the record. What git
-    refuses is the only check, and when it refuses nothing changes; the
-    removal is left staged. A record or an index line already there for this
+    refuses is the only check: on its refusal jalon stops and writes nothing.
+    A removal is left staged. A record or an index line already there for this
     decision refuses, named, and nothing changes: a run that stopped part-way
     is reconciled by a person, with git."""
     root = _root()
@@ -274,7 +274,7 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
             gone = subprocess.run(["git", "-C", str(root.parent), "rm", "--", f":(glob)decisions/{replaces}-*.md"],
                                   stdout=2, stderr=subprocess.PIPE, text=True)  # its own lines are shown
             if gone.returncode != 0:
-                raise Refused(f"git did not remove the record of #{replaces}, so nothing changes: {gone.stderr.strip()}")
+                raise Refused(f"git did not remove the record of #{replaces}: {gone.stderr.strip()}")
         _write(target, text)
         if older:
             older["replaced_by"] = number

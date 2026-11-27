@@ -12,7 +12,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 |---|---|
 | `skills/scope/` | The `scope` skill: narrows a conversation to one issue an agent can pick up, with nine sections, a checkable "Done when" and a review depth. |
 | `jalon park file` | Files one issue, after checking the nine sections. The check catches a forgotten section or "Done when" line; it is not a guard against hidden or oddly formatted text, and a person reads every issue before it is filed. Without `--repo` it files into the checkout's repository, host included, read with `GH_REPO` left out. |
-| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; when git refuses, nothing changes, and a removal is left staged. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
+| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; a removal is left staged, and if git refuses, jalon stops and writes no record. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
 | `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list: file contents, file names and link targets, commit messages, authors and committers, and what a merge's resolution adds. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 
@@ -82,5 +82,6 @@ Tests call the code from inside. `tests/test_outside.py` is the exception: it
 runs the real command in a scratch repository with a stand-in `gh`, once for
 each command's main path and once for each refusal that guards a boundary.
 `tests/test_alone.py` runs a copy of the folder's tests elsewhere and fails
-if any of its Python processes opens a file under this repository or the
-user's home.
+if one of the Python processes it observes opens a file under this repository
+or the user's home. It does not observe the hook `jalon push` hands to git,
+which runs isolated from the environment the observation rides in.
