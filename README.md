@@ -27,6 +27,9 @@ comment is ignored, and so is a `.gitleaksignore`, in the working folder or
 in what is scanned. A
 machine without that file cannot send anything to a public repository
 through jalon. A repository GitHub does not report as `PRIVATE` is public.
+A list that extends another file names it by its full path: jalon runs
+gitleaks from a folder of its own, where a relative path is not found, and a
+folder or a push is then refused, clean or not.
 
 ### Where jalon's part ends
 
@@ -36,29 +39,33 @@ decoded how, and under what name.
 - **Which bytes.** In a folder: every file, every name and link target. In a
   push: every file it sends, every path of each commit, each commit's and
   tag's own text, and each ref's name.
-- **Decoded how.** Text is decoded once, as UTF-8, or as UTF-16 by its
-  byte-order mark, and handed on after one line break. Anything else is
-  handed on unopened, and named in the output; so is a text that holds a
-  NUL, though it is handed on decoded.
+- **Decoded how.** Bytes that decode as UTF-8, or as UTF-16 when they open
+  with its byte-order mark, are handed on decoded, after one line break.
+  Bytes that do not decode are handed on as they are. A file is named in the
+  output when its bytes do not decode, or hold a NUL: it may not be text.
+  All of this goes by the bytes alone: an archive that happens to decode is
+  handed on as a text is, and a UTF-32 text that opens with UTF-16's mark is
+  decoded as UTF-16.
 - **Under what name.** Each file goes to gitleaks under a number.
 
 What gitleaks then reads of those bytes, and what it matches in them, is
 gitleaks'. jalon makes no claim about it. Known with gitleaks 8.30.1:
 
-- it reads a text in blocks. One longer than 125,000 bytes, with no empty
-  line between its bytes 100,000 and 125,000, is cut there, and a name that
-  lies across the cut is not matched. On standard input the cut falls
-  elsewhere, and not at the same place twice;
+- it reads a long text in blocks and matches inside each one: a name that
+  lies across the end of a block is not matched. A text of some tens of
+  thousands of bytes can be long enough;
 - it skips, without a word, what it takes for a binary file by a signature.
   The line break jalon puts first is there for that: a text that opens with
   `%PDF`, `{\rtf` or `MZ` is read. A signature that sits further in still
   makes it skip the text: a tar archive's, 256 bytes into one;
 - it matches every path in the list against the number a file is handed over
-  under, never against the file's own path (see below).
+  under, never against the file's own path (see below);
+- a rule's `keywords` can make it pass a spelling the rule's own pattern
+  matches: seen with a Greek name written in the other letter case.
 
-The line break has two costs. For a text jalon decoded, a line number in a
-refusal is one higher than in the file; for a file handed on unopened it is
-the file's own. And a rule anchored at the very start of a text no longer
+The line break has two costs. For bytes jalon decoded, a line number in a
+refusal is one higher than in the file; for bytes handed on as they are it
+is the file's own. And a rule anchored at the very start of a text no longer
 matches there.
 
 The check does not catch:
@@ -67,10 +74,11 @@ The check does not catch:
 - a file that is not text: an image, an archive, an office file, or a text
   in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
   is named in the output, `jalon: not read, as it is not text: '<name>'`.
-  The notice changes nothing by itself: the bytes of such a file are still
-  handed to gitleaks, the result is what gitleaks makes of them, and jalon
-  does not check that. Archives are not opened. In a push, a file that sits
-  at several paths is named by one of them;
+  The notice changes nothing by itself: such a file still goes to gitleaks,
+  handed on as said above, the result is what gitleaks makes of it, and
+  jalon does not check that. Archives are not opened: no member is taken
+  out of one. In a push, a file that sits at several paths is named by one
+  of them;
 - what a rule finds by a file's path: gitleaks receives each text under a
   number, so that none of its own rules sets a file aside by its path, as
   they do a lock file, an `.svg` or `node_modules`. No rule with a path then
