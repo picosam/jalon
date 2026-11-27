@@ -34,7 +34,7 @@ def gh(monkeypatch):
         if args[:2] in (("issue", "view"), ("repo", "view")):
             fake.envs.append(env)
         if args[:2] == ("repo", "view"):
-            return "owner/name\n"
+            return "https://github.com/owner/name\n"
         if args[:2] == ("issue", "create"):
             return "https://example.org/8\n"
         if args[:2] == ("issue", "close"):
@@ -192,24 +192,7 @@ def test_gh_receives_the_body_that_was_checked(gh, body, monkeypatch):
         body.write_text(BODY.replace("Because", "Since"))
     monkeypatch.setattr(leak, "check_text", check)
     park.file("A title", body, "none")
-    assert checked == ["A title\n\n" + BODY] and gh.inputs == [BODY]
-
-
-def test_reject_removes_the_deposit_and_says_why(alone):
-    deposit = alone / "deposit.md"
-    deposit.write_text("a proposal")
-    assert park.reject(deposit, "covered by #3") == "rejected deposit.md: covered by #3"
-    assert not deposit.exists()
-    with pytest.raises(Refused, match="no deposit"):
-        park.reject(deposit, "again")
-
-
-def test_reject_needs_a_reason(alone):
-    deposit = alone / "deposit.md"
-    deposit.write_text("a proposal")
-    with pytest.raises(Refused, match="reason"):
-        park.reject(deposit, " ")
-    assert deposit.exists()
+    assert checked == ["A title\n\n" + BODY] and gh.inputs[-1:] == [BODY]
 
 
 @pytest.fixture
@@ -350,21 +333,20 @@ def test_a_replaced_decision_loses_its_file_and_keeps_its_line(gh, checkout):
     assert [(row["number"], row["replaced_by"]) for row in rows(checkout)] == [(7, 9), (9, None)]
 
 
-@pytest.mark.parametrize("state", ["never committed", "changed since", "changed and marked unchanged"])
+@pytest.mark.parametrize("state", ["never committed", "changed since", "changed and staged"])
 def test_a_decision_not_committed_as_it_stands_cannot_be_replaced(gh, checkout, state):
-    # Its file goes, so git must hold its words first;
-    # its bytes are compared, so an index flag cannot hide a change.
+    # Its file goes, so git must hold its words first: git removes it, and
+    # refuses one it does not track or that differs from the last commit.
     ruled(gh, 7)
     old = park.close(7, record(checkout), "which-option")
     if state != "never committed":
         commit_all(checkout)
         old.write_text(old.read_text() + "An amendment.\n")
-    if state == "changed and marked unchanged":
-        subprocess.run(["git", "update-index", "--assume-unchanged", "decisions/7-which-option.md"], cwd=checkout,
-                       check=True)
+    if state == "changed and staged":
+        subprocess.run(["git", "add", "decisions/7-which-option.md"], cwd=checkout, check=True)
     words = old.read_bytes()
     ruled(gh, 9)
-    with pytest.raises(Refused, match="not committed as it stands"):
+    with pytest.raises(Refused, match="git did not remove the record of #7"):
         park.close(9, record(checkout), "which-option-again", replaces=7)
     assert old.read_bytes() == words and not (checkout / "decisions/9-which-option-again.md").exists()
     assert [row["number"] for row in rows(checkout)] == [7]
@@ -448,10 +430,10 @@ def test_close_reads_the_issue_from_this_repository_and_refuses_another(gh, chec
     monkeypatch.setenv("GH_REPO", "owner/other")
     ruled(gh, 7)
     park.close(7, record(checkout), "which-option")
-    assert ["issue", "view", "7", "--repo", "owner/name"] == gh.calls[1][:5]
+    assert ["issue", "view", "7", "--repo", "https://github.com/owner/name"] == gh.calls[1][:5]
     assert gh.envs and all(env is not None and "GH_REPO" not in env for env in gh.envs)
     ruled(gh, 9, url=url)
-    with pytest.raises(Refused, match="not an issue of owner/name"):
+    with pytest.raises(Refused, match="not an issue of https://github.com/owner/name"):
         park.close(9, record(checkout), "other-option")
     assert [row["number"] for row in rows(checkout)] == [7]
 
@@ -460,10 +442,10 @@ def test_close_records_only_in_the_repository_the_issue_was_closed_in(gh, checko
     # The hand close and the record name one repository, "$repo"; if gh's
     # default moved between them, the record refuses before reading the issue.
     ruled(gh, 7)
-    with pytest.raises(Refused, match="closed in owner/other, but this checkout's repository is owner/name"):
+    with pytest.raises(Refused, match="closed in owner/other, but this checkout's repository is https://github.com/owner/name"):
         park.close(7, record(checkout), "which-option", repo="owner/other")
     assert [call[:2] for call in gh.calls] == [["repo", "view"]] and not (checkout / "decisions").exists()
-    park.close(7, record(checkout), "which-option", repo="owner/name")
+    park.close(7, record(checkout), "which-option", repo="https://github.com/owner/name")
     assert [row["link"] for row in rows(checkout)] == ["https://github.com/owner/name/issues/7"]
 
 

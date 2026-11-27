@@ -65,7 +65,7 @@ for arg; do
   prev=$arg
 done
 key="$1-$2"
-case "$*" in *nameWithOwner*) key=repo-name;; esac
+case "$*" in *"--json url"*) key=repo-url;; esac
 code=0
 [ -f "$GH_STANDIN/$key.exit" ] && code=$(cat "$GH_STANDIN/$key.exit")
 [ -f "$GH_STANDIN/$key.out" ] && cat "$GH_STANDIN/$key.out"
@@ -110,15 +110,18 @@ def private_list(tmp_path, monkeypatch):
 def outside(tmp_path, monkeypatch):
     """What a test from outside needs on PATH: the real command under the
     name `jalon`, and a stand-in `gh`. Returns the stand-in's folder: write
-    `<word>-<word>.out` and `.exit` there to set an answer; read `calls`."""
+    `<word>-<word>.out` and `.exit` there to set an answer (`repo-url` for the
+    read of the checkout's repository); read `calls`. Like the installed
+    script, the command does not look for modules in the folder it runs in
+    (-P); it finds its own source first and hands PYTHONPATH on untouched."""
     bin = tmp_path / "bin"
     bin.mkdir()
     standin = tmp_path / "gh"
     standin.mkdir()
     (standin / "calls").write_text("")
     (bin / "gh").write_text(GH)
-    (bin / "jalon").write_text(f'#!/bin/sh\nPYTHONPATH="{SRC}${{PYTHONPATH:+{os.pathsep}$PYTHONPATH}}" '
-                               f'exec "{sys.executable}" -m jalon "$@"\n')
+    (bin / "jalon").write_text(f'#!/bin/sh\nexec "{sys.executable}" -P -c "import sys; sys.path.insert(0, sys.argv.pop(1)); '
+                               f'from jalon.cli import main; sys.exit(main())" "{SRC}" "$@"\n')
     for tool in ("gh", "jalon"):
         (bin / tool).chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin}{os.pathsep}{os.environ['PATH']}")

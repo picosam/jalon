@@ -3,10 +3,13 @@
 Two proofs. No file of the folder names a path outside it but the one the
 design places outside every repository, the private list. And a copy of the
 folder, put elsewhere, passes its own tests while every Python process of
-that run (the test process, each `jalon` command it starts, and the hook
-`jalon push` hands to git) reports each file it opens under the folder's
-repository or the user's real home; none may be reported. The interpreter's
-own files are the one exception named.
+that run (the test process and each `jalon` command it starts) reports each
+file it opens under the folder's repository or the user's real home; none may
+be reported. The interpreter's own files are the one exception named.
+
+The hook `jalon push` hands to git is not observed: it starts Python isolated
+from the environment, which is where the report rides in. What it runs, the
+check of a push, is observed where the tests call it from inside.
 
 The proof's reach: jalon's Python processes,
 observed, and the folder's text, read. git, gitleaks and gh's stand-in are not Python and their reads are not
@@ -26,7 +29,7 @@ import pytest
 
 FOLDER = Path(__file__).resolve().parent.parent
 REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
-LEFT_OUT = {".venv", "__pycache__", ".pytest_cache"}
+LEFT_OUT = {".git", ".venv", "__pycache__", ".pytest_cache"}
 
 # Spelled in pieces so that this file does not name them itself.
 OUTSIDE = re.compile("|".join([r"/" + "Users/", r"/" + "home/", r"~" + "/"]))

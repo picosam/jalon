@@ -23,6 +23,9 @@ from pathlib import Path
 
 LIST_ENV = "JALON_PRIVATE_LIST"
 NEXT_HOOK_ENV = "JALON_NEXT_PRE_PUSH"
+# What the hook of `push` runs, in Python's isolated mode: the folder of this
+# package, its first argument, goes first on the module search path.
+HOOK = "import sys; sys.path.insert(0, sys.argv.pop(1)); from jalon.cli import main; sys.exit(main())"
 # How a commit's content is read: a root commit's whole content whatever
 # log.showRoot says, a merge's own changes (what its resolution adds to its
 # two parents), every file as text whatever its attributes say, no colour
@@ -226,7 +229,9 @@ def push(args: list[str]) -> int:
     not installed. git itself works out what is pushed and hands it to the
     hook. An argument that git could read as skipping hooks is refused, in any
     spelling and any place. The repository's own pre-push hook, if it has one,
-    runs after the check with the same input, and either can stop the push."""
+    runs after the check with the same input, and either can stop the push.
+    The hook runs the jalon that wrote it: isolated (-I), Python leaves out
+    the folder git runs it in, PYTHONPATH and the user's own packages."""
     # Every argument, `--` or not: an option's value can be `--` itself.
     skips = [arg for arg in args if len(arg) > len("--no-") and "--no-verify".startswith(arg)]
     if skips:
@@ -237,7 +242,9 @@ def push(args: list[str]) -> int:
         env[NEXT_HOOK_ENV] = str(own)
     with tempfile.TemporaryDirectory() as hooks:
         hook = Path(hooks) / "pre-push"
-        hook.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -m jalon leak pre-push "$@"\n')
+        package = shlex.quote(str(Path(__file__).resolve().parents[1]))
+        hook.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -I -c {shlex.quote(HOOK)} {package} '
+                        'leak pre-push "$@"\n')
         hook.chmod(0o755)
         return subprocess.run(["git", "-c", f"core.hooksPath={hooks}", "push", *args], env=env).returncode
 
