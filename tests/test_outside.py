@@ -629,6 +629,8 @@ def test_what_is_not_text_is_named_and_does_not_decide(repo, private_list, tmp_p
     folder.mkdir()
     for where in (folder, repo):
         names = not_text(where)
+        (where / "  spaced.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(255, -1, -1)))
+        names.append("  spaced.png")  # named with its two spaces, in a push as in a folder
         (where / "notes.txt").write_text(f"written by {NAME if listed else 'someone'}\n")
     run("git", "add", "notes.txt", *names, cwd=repo)
     assert run("git", "commit", "-q", "-m", "an export", cwd=repo).returncode == 0

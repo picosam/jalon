@@ -230,6 +230,47 @@ def test_a_name_is_read_as_git_stores_it(private_list, alone, name, rule):
         leak.check_commits(alone, [tip, "--not", base])
 
 
+@needs_gitleaks
+@pytest.mark.parametrize("how", ["a folder moved whole", "two folders of the same content", "a parent with a line break"])
+def test_a_path_is_read_whole_wherever_its_folder_comes_from(private_list, alone, how):
+    # git sends a folder it has already sent by its name alone, and one of two alike once: the paths are
+    # read from each commit instead, every one, as its tree spells it.
+    private_list.write_text(LIST.replace("'''Zorblatt'''", "'''Second/Private'''"))
+    git(alone, "init", "-q", "-b", "main")
+    first = "front\nback/First" if how == "a parent with a line break" else "First"
+    second = first.replace("First", "Second")
+    (alone / first).mkdir(parents=True)
+    (alone / first / "Private.txt").write_text("a clean line\n")
+    git(alone, "add", "-A")
+    git(alone, "commit", "-q", "-m", "one folder")
+    base = git(alone, "rev-parse", "HEAD")
+    leak.check_commits(alone, [base])  # the control: the same file under First passes
+    if how == "a folder moved whole":
+        git(alone, "mv", first, second)
+    else:
+        (alone / second).mkdir()
+        (alone / second / "Private.txt").write_text("a clean line\n")
+        git(alone, "add", "-A")
+    git(alone, "commit", "-q", "-m", "another")
+    with pytest.raises(Refused, match="private-name"):
+        leak.check_commits(alone, ["HEAD", "--not", base])
+
+
+@needs_gitleaks
+def test_every_path_of_a_pushed_commit_is_read(private_list, alone):
+    # A stated cost: a listed name in a path the destination already holds refuses a push that touches
+    # another folder, until a commit renames that path away.
+    git(alone, "init", "-q", "-b", "main")
+    (alone / "docs").mkdir()
+    held = committed(alone, "docs/Zorblatt.txt", "a clean line\n")
+    other = committed(alone, "other.txt", "a clean line\n")
+    with pytest.raises(Refused, match="private-name"):
+        leak.check_commits(alone, [other, "--not", held])
+    git(alone, "mv", "docs/Zorblatt.txt", "docs/plain.txt")
+    git(alone, "commit", "-q", "-m", "renamed away")
+    leak.check_commits(alone, ["HEAD", "--not", other])
+
+
 POINTER = "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n"
 
 
@@ -306,6 +347,34 @@ def test_a_utf_16_text_is_decoded_once(private_list, alone, capsys, mark, encodi
     for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
         with pytest.raises(Refused, match="private-name"):
             scan()
+
+
+@needs_gitleaks
+@pytest.mark.parametrize("opening", ["%PDF-1.4", "{\\rtf1", "MZ"])
+def test_a_text_is_handed_on_as_text_whatever_it_opens_with(private_list, alone, capsys, opening):
+    # gitleaks skips, without a word, what opens as a binary file does. A text jalon decoded goes to it
+    # after one line break, and so does a text on standard input.
+    clean, listed = f"{opening} opens this text.\n", f"{opening} opens this text, by Zorblatt.\n"
+    folder, revs = both_scans(alone, "notes.txt", clean.encode())
+    leak.check_dir(folder)
+    leak.check_commits(alone, revs)
+    leak.check_text(clean)
+    folder, revs = both_scans(alone, "notes.txt", listed.encode())
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs), lambda: leak.check_text(listed)):
+        with pytest.raises(Refused, match="private-name"):
+            scan()
+    assert "not read" not in capsys.readouterr().err
+
+
+@needs_gitleaks
+def test_a_name_that_opens_as_a_binary_file_does_hides_no_other_name(private_list, alone):
+    # The names of a folder go to gitleaks as one text, in order: the first one opens it.
+    (alone / "folder").mkdir()
+    (alone / "folder/%PDF-1.4 scan.txt").write_text("a clean line\n")
+    leak.check_dir("folder")
+    (alone / "folder/Zorblatt.txt").write_text("")
+    with pytest.raises(Refused, match="private-name"):
+        leak.check_dir("folder")
 
 
 @needs_gitleaks

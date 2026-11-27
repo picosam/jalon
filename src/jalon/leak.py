@@ -37,8 +37,8 @@ def list_path() -> Path:
 
 
 def _scan(text: str | None = None, *, folder: str | None = None, names: list[str] | None = None) -> None:
-    """gitleaks with the machine's list, on a text, or on a folder `_hand` filled: read from inside it, so that
-    no path above it counts either. A refusal says what each of that folder's numbers is called (`names`)."""
+    """gitleaks with the machine's list, on a text (after one line break, as in `_hand`) or on a folder `_hand`
+    filled, read from inside it so that no path above it counts. A refusal says what each number is called."""
     rules = list_path()
     if not rules.is_file():
         raise Refused(f"no private list at {rules}: nothing goes to a public repository from this machine")
@@ -49,8 +49,8 @@ def _scan(text: str | None = None, *, folder: str | None = None, names: list[str
         run = subprocess.run(
             ["gitleaks", *(["dir", "."] if folder else ["stdin"]), "--config", str(rules.absolute()),
              "--gitleaks-ignore-path", nothing, "--ignore-gitleaks-allow", "--no-banner", "--redact", "--verbose"],
-            input=text, cwd=folder, capture_output=True, encoding="utf-8", errors="replace",  # it quotes what it finds
-        )
+            input=text and "\n" + text, cwd=folder, capture_output=True, encoding="utf-8",
+            errors="replace")  # gitleaks quotes what it finds
     if run.returncode != 0:
         said = (run.stdout + run.stderr).strip() or f"gitleaks exited {run.returncode}"
         found = sorted({int(file) for file in re.findall(r"(?m)^File: +(\d+)$", said)}) if names else []
@@ -62,25 +62,26 @@ def _env() -> dict[str, str]:
     return {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
 
 
-def _git(repo: Path | str, *args: str, input: str | None = None) -> str:
+def _git(repo: Path | str, *args: str, input: str = "") -> str:
+    """What git prints, byte for byte: no line break of a name is rewritten on the way."""
+    run = subprocess.run(["git", "-C", str(repo), *args], input=input.encode(), capture_output=True, env=_env())
+    if run.returncode != 0:
+        raise Refused(f"git {' '.join(args)}: {run.stderr.decode(errors='replace').strip()}")
     try:
-        run = subprocess.run(["git", "-C", str(repo), *args], input=input, capture_output=True, env=_env(),
-                             encoding="utf-8")
+        return run.stdout.decode()
     except UnicodeDecodeError:
         raise Refused(f"git {' '.join(args)}: a name or a message is not UTF-8, so it cannot be checked") from None
-    if run.returncode != 0:
-        raise Refused(f"git {' '.join(args)}: {run.stderr.strip()}")
-    return run.stdout
 
 
 def _hand(copy: str, names: list[str], name: str, data: bytes) -> None:
     """One file or blob for gitleaks, under its number in `names`: gitleaks sets files aside by their path
-    (a lock file, an image, `node_modules`), and a number gives it none. Text is decoded once, as UTF-8, or
-    as UTF-16 by its byte-order mark. Anything else is named, and its bytes go on unopened."""
+    (a lock file, an image, `node_modules`), and a number gives it none. Text is decoded once, as UTF-8, or as
+    UTF-16 by its byte-order mark, and goes on after one line break: gitleaks skips what opens as a binary file
+    does (`%PDF`, `MZ`). Anything else is named, and its bytes go on unopened."""
     wide = data[:2] in (b"\xff\xfe", b"\xfe\xff")
     try:
         text = data.decode("utf-16" if wide else "utf-8")
-        data = text.encode() if wide else data
+        data = b"\n" + text.encode()
     except UnicodeDecodeError:
         text = "\0"
     if "\0" in text:  # undecoded, or a NUL in it: not known to be text
@@ -127,35 +128,34 @@ def check_commits(repo: Path | str, revs: list[str]) -> None:
     """What a push of the commits `git rev-list <revs>` selects would send: the
     objects `git rev-list --objects <revs>` lists, each read whole and as git
     stores it, one at a time, with no patch and no display setting between.
-    A blob is handed on as a file is; a tree gives its entries' paths, a commit
-    or a tag its whole text. A new Git LFS pointer refuses, removing one does not."""
+    A blob is handed on as a file is, a commit or a tag as its whole text. The paths are those of each
+    commit, every one, the destination's too. A new Git LFS pointer refuses, removing one does not."""
     git = ["git", "-C", str(repo)]
-    said, names, files = [], set(), []
+    said, where, files = [], {}, []
+    for commit in _git(repo, "rev-list", *revs).split():
+        for entry in _git(repo, "ls-tree", "-r", "-z", commit).split("\0")[:-1]:
+            where.setdefault(entry.split(maxsplit=3)[2], set()).add(entry.partition("\t")[2])  # an object's paths
     with tempfile.TemporaryDirectory() as copy:
-        with (subprocess.Popen([*git, "rev-list", "--objects", *revs], stdout=subprocess.PIPE, env=_env()) as lister,
-              subprocess.Popen([*git, "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"],
+        with (subprocess.Popen([*git, "rev-list", "--objects", "--no-object-names", *revs], stdout=subprocess.PIPE,
+                               env=_env()) as lister,
+              subprocess.Popen([*git, "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize)"],
                                stdin=lister.stdout, stdout=subprocess.PIPE, env=_env()) as reader):
             lister.stdout.close()
             for head in iter(reader.stdout.readline, b""):
-                oid, kind, size, path = [*head[:-1].split(b" ", 3), b"", b""][:4]
+                oid, kind, size = [*head.decode().split(), ""][:3]
                 if not size.isdigit():  # an object this clone lacks
-                    raise Refused(f"git cat-file: {head.decode(errors='replace').strip()}")
-                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), path.decode(errors="replace")
-                if kind == b"blob" and data.startswith((b"version https://git-lfs", b"version https://hawser")):
+                    raise Refused(f"git cat-file: {head.decode().strip()}")
+                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), min(where.get(oid, [oid]))
+                if kind == "blob" and data.startswith((b"version https://git-lfs", b"version https://hawser")):
                     raise Refused(f"{name!r} is a Git LFS pointer, whose content goes outside git, past this check")
-                if kind == b"blob":
+                if kind == "blob":
                     _hand(copy, files, name, data)
-                elif kind == b"tree":
-                    while data:
-                        entry, _, data = data.partition(b"\0")
-                        names.add((path + b"/" if path else b"") + entry.split(b" ", 1)[1])  # from the top
-                        data = data[len(oid) // 2:]
-                else:
+                elif kind != "tree":
                     said.append(data)
         if lister.returncode or reader.returncode:
             raise Refused(f"git could not list or read the objects of {' '.join(revs)}")
         try:
-            _scan(b"\n".join([*said, *sorted(names), b""]).decode())
+            _scan("\n".join([b"\n".join(said).decode(), *sorted(set().union(*where.values())), ""]))
         except UnicodeDecodeError:
             raise Refused("a name or a message is not UTF-8, so it cannot be checked") from None
         _scan(folder=copy, names=files)
