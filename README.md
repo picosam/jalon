@@ -13,7 +13,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 | `skills/scope/` | The `scope` skill: narrows a conversation to one issue an agent can pick up, with nine sections, a checkable "Done when" and a review depth. |
 | `jalon park file` | Files one issue, after checking the nine sections. The check catches a forgotten section or "Done when" line; it is not a guard against hidden or oddly formatted text, and a person reads every issue before it is filed. Without `--repo` it files into the checkout's repository, host included, read with `GH_REPO` left out. |
 | `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; a removal is left staged, and if git refuses, jalon stops and writes no record. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
-| `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list: file contents, file names and link targets, commit messages, authors and committers, and what a merge's resolution adds. |
+| `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list. In a folder: every text file's content, every file name and link target. In commits: the objects a push of them would send, each read whole as git stores it, with no patch in between: each new file, the names in each new or changed folder, and each commit's or tag's own text. A file that is not text is named in the output as not read. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 
 ## The private list
@@ -30,12 +30,20 @@ through jalon. A repository GitHub does not report as `PRIVATE` is public.
 The check does not catch:
 
 - a private fact told in other words, or a name that is not on the list;
-- anything in an image;
-- a file that a rule on paths alone would match, when it is empty or renamed
-  without change: such a rule is applied to files with content;
+- a file that is not text: an image, an archive, an office file, or a text
+  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
+  is named in the output, `jalon: not read, as it is not text: '<name>'`, and
+  does not change the result. Archives are not opened. The bytes of such a
+  file still go to gitleaks, which matches a name written in them plainly;
+- a rule of the list on paths alone, which is not applied: gitleaks receives
+  each text under a number, so that none of its own rules sets a file aside
+  by its path, as they do a lock file, an `.svg` or `node_modules`. A name is
+  matched as text, in a file's name as in its content;
 - a later push from a repository whose Git LFS content is already public: a
   push that introduces or changes an LFS pointer is refused, and the next one
   that changes none is not;
+- content the destination already holds, which a push does not send: the
+  same file under a new name is not read again, though its new name is;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
 - git push options (`git push -o`), which `jalon push` passes to the
@@ -46,6 +54,10 @@ The check does not catch:
   runs. The hook `jalon push` hands to git is isolated from that: it runs the
   jalon that wrote it, whatever the repository being pushed or the
   environment holds.
+
+The commit scan can also refuse what a patch would not show: a folder that
+changes is sent with all its names, so a listed name already at the
+destination refuses the next push that touches its folder.
 
 `park close --replaces` checks nothing about the record it removes: it runs
 `git rm` on `decisions/<number>-*.md` at the top of the checkout and shows

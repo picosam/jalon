@@ -13,6 +13,7 @@ read counts as public.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -23,18 +24,7 @@ from pathlib import Path
 
 LIST_ENV = "JALON_PRIVATE_LIST"
 NEXT_HOOK_ENV = "JALON_NEXT_PRE_PUSH"
-# What the hook of `push` runs, in Python's isolated mode: the folder of this
-# package, its first argument, goes first on the module search path.
 HOOK = "import sys; sys.path.insert(0, sys.argv.pop(1)); from jalon.cli import main; sys.exit(main())"
-# How a commit's content is read: a root commit's whole content whatever
-# log.showRoot says, a merge's own changes (what its resolution adds to its
-# two parents), every file as text whatever its attributes say, no colour
-# whatever color.ui says, and no conversion or external tool between the
-# file and the scan.
-LOG = ["--root", "--no-color", "--diff-merges=remerge", "--text", "--no-textconv", "--no-ext-diff"]
-# A pointer's first line, or its oid line, which alone changes when its object
-# is replaced: a git -G pattern, which git reads as an extended expression.
-LFS = "^(version https://git-lfs|oid sha256:)"
 
 
 class Refused(Exception):
@@ -46,107 +36,129 @@ def list_path() -> Path:
     return Path(named) if named else Path.home() / ".config" / "jalon" / "private.toml"
 
 
-def _scan(mode: list[str], *, text: str | None = None) -> None:
+def _scan(text: str | None = None, *, folder: str | None = None, names: list[str] | None = None) -> None:
+    """gitleaks with the machine's list, on a text, or on a folder `_hand` filled: read from inside it, so that
+    no path above it counts either. A refusal says what each of that folder's numbers is called (`names`)."""
     rules = list_path()
     if not rules.is_file():
         raise Refused(f"no private list at {rules}: nothing goes to a public repository from this machine")
     if shutil.which("gitleaks") is None:
         raise Refused("gitleaks is not installed: nothing goes to a public repository from this machine")
-    # The list alone may set a finding aside: no `gitleaks:allow` comment, and
-    # no .gitleaksignore, neither the working folder's nor the scanned one's
-    # (gitleaks reads the scanned one whatever --gitleaks-ignore-path says).
-    if mode[0] in ("dir", "git") and (Path(mode[-1]) / ".gitleaksignore").exists():
-        raise Refused(f"{Path(mode[-1]) / '.gitleaksignore'} would set findings aside: only the private list may")
+    # The list alone sets a finding aside: no `gitleaks:allow` comment, no .gitleaksignore of the working folder.
     with tempfile.TemporaryDirectory() as nothing:
         run = subprocess.run(
-            ["gitleaks", *mode, "--config", str(rules), "--gitleaks-ignore-path", nothing, "--ignore-gitleaks-allow",
-             "--no-banner", "--redact", "--verbose"],
-            input=text, capture_output=True, text=True, env=_env(),
+            ["gitleaks", *(["dir", "."] if folder else ["stdin"]), "--config", str(rules.absolute()),
+             "--gitleaks-ignore-path", nothing, "--ignore-gitleaks-allow", "--no-banner", "--redact", "--verbose"],
+            input=text, cwd=folder, capture_output=True, encoding="utf-8", errors="replace",  # it quotes what it finds
         )
     if run.returncode != 0:
-        raise Refused((run.stdout + run.stderr).strip() or f"gitleaks exited {run.returncode}")
+        said = (run.stdout + run.stderr).strip() or f"gitleaks exited {run.returncode}"
+        found = sorted({int(file) for file in re.findall(r"(?m)^File: +(\d+)$", said)}) if names else []
+        raise Refused(said + "".join(f"\nfile {file} is {names[file]!r}" for file in found if file < len(names)))
 
 
 def _env() -> dict[str, str]:
-    """git as the transfer sees it: no replacement object shows a history
-    other than the one a push sends."""
+    """git as a push sees it: no replacement object stands in for the one sent."""
     return {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
 
 
-def _git(repo: Path | str, *args: str, input: str | None = None, raw: bool = False):
-    """git's output as text, or as bytes when `raw`: names read as bytes keep
-    a carriage return, which text mode would turn into a line break."""
+def _git(repo: Path | str, *args: str, input: str | None = None) -> str:
     try:
-        run = subprocess.run(["git", "-C", str(repo), "-c", "core.quotePath=false", *args], input=input,
-                             capture_output=True, env=_env(), **({} if raw else {"encoding": "utf-8"}))
-        names = [name.decode("utf-8") for name in run.stdout.split(b"\0") if name] if raw else None
+        run = subprocess.run(["git", "-C", str(repo), *args], input=input, capture_output=True, env=_env(),
+                             encoding="utf-8")
     except UnicodeDecodeError:
         raise Refused(f"git {' '.join(args)}: a name or a message is not UTF-8, so it cannot be checked") from None
     if run.returncode != 0:
         raise Refused(f"git {' '.join(args)}: {run.stderr.strip()}")
-    return names if raw else run.stdout
+    return run.stdout
+
+
+def _hand(copy: str, names: list[str], name: str, data: bytes) -> None:
+    """One file or blob for gitleaks, under its number in `names`: gitleaks sets files aside by their path
+    (a lock file, an image, `node_modules`), and a number gives it none. Text is decoded once, as UTF-8, or
+    as UTF-16 by its byte-order mark. Anything else is named, and its bytes go on unopened."""
+    wide = data[:2] in (b"\xff\xfe", b"\xfe\xff")
+    try:
+        text = data.decode("utf-16" if wide else "utf-8")
+    except UnicodeDecodeError:
+        text = "\0"
+    if "\0" in text:
+        print(f"jalon: not read, as it is not text: {name!r}", file=sys.stderr)
+    Path(copy, str(len(names))).write_bytes(text.encode() if wide and "\0" not in text else data)
+    names.append(name)
 
 
 def check_text(text: str) -> None:
     """A text bound for a public repository: a title, a body, a comment."""
-    _scan(["stdin"], text=text)
+    _scan(text)
 
 
 def check_dir(path: Path | str) -> None:
-    """A whole folder, as it stands on disk: every file's content, and every
-    name and link target in it, which gitleaks does not read. Each file is
-    read once, into a private copy, and the copy is what gitleaks scans, so
-    the bytes checked are the bytes read. A file that cannot be read, or an
-    entry that is neither a file, a folder nor a link, refuses: what is not
-    read is not known to be clean."""
+    """A whole folder, as it stands on disk: every file's content, read once
+    and handed on by `_hand`, and every name and link target in it. A file
+    that cannot be read, or an entry that is neither a file, a folder nor a
+    link, refuses: what is not read is not known to be clean."""
     root = Path(path)
 
     def unreadable(error: OSError) -> None:
         raise Refused(f"cannot read {error.filename}: {error.strerror}")
 
-    names = []
+    names, files = [], []
     with tempfile.TemporaryDirectory() as copy:
-        for folder, folders, files in os.walk(root, onerror=unreadable):  # a link to a folder is listed, not entered
-            for entry in sorted(folders + files):
+        for folder, folders, entries in os.walk(root, onerror=unreadable):  # a link to a folder is listed, not entered
+            for entry in sorted(folders + entries):
                 full = Path(folder, entry)
-                relative = full.relative_to(root)
-                names.append(relative.as_posix())
+                names.append(full.relative_to(root).as_posix())
                 mode = full.lstat().st_mode
                 if stat.S_ISLNK(mode):
                     names.append(os.readlink(full))
-                    # In the copy a link becomes a file holding its target, so
-                    # a rule on paths sees its path too.
-                    (Path(copy) / relative).parent.mkdir(parents=True, exist_ok=True)
-                    (Path(copy) / relative).write_text(os.readlink(full) + "\n")
                 elif stat.S_ISREG(mode):
-                    (Path(copy) / relative).parent.mkdir(parents=True, exist_ok=True)
                     try:
-                        (Path(copy) / relative).write_bytes(full.read_bytes())
+                        _hand(copy, files, names[-1], full.read_bytes())
                     except OSError as error:
                         unreadable(error)
                 elif not stat.S_ISDIR(mode):
                     raise Refused(f"{full} is neither a file, a folder nor a link")
-        if (root / ".gitleaksignore").exists():
-            raise Refused(f"{root / '.gitleaksignore'} would set findings aside: only the private list may")
-        _scan(["stdin"], text="\n".join(names) + "\n")
-        _scan(["dir", copy])
+        _scan("\n".join(names) + "\n")
+        _scan(folder=copy, names=files)
 
 
 def check_commits(repo: Path | str, revs: list[str]) -> None:
-    """The commits `git log <revs>` selects: what they add, a merge's own
-    resolution included, and their messages, authors, committers and the
-    paths they touch, which gitleaks does not read itself."""
-    if not _git(repo, "rev-list", *revs).split():
-        return
-    if octopus := _git(repo, "rev-list", "--min-parents=3", *revs).split():
-        raise Refused(f"{octopus[0]} merges more than two parents, whose own changes cannot be read: "
-                      "merge them two at a time")
-    if lfs := _git(repo, "log", *LOG, "--format=%H", "-G", LFS, *revs).split():
-        raise Refused(f"{lfs[0]} holds a Git LFS pointer, whose content goes outside git, past this check")
-    _scan(["git", "--log-opts=" + " ".join([*LOG, *revs]), str(repo)])
-    names = _git(repo, "log", *LOG, "--name-only", "-z", "--format=", *revs, raw=True)
-    metadata = _git(repo, "log", "--format=%H%n%an <%ae>%n%cn <%ce>%n%B", *revs)
-    _scan(["stdin"], text=metadata + "\n".join(names) + "\n")
+    """What a push of the commits `git rev-list <revs>` selects would send: the
+    objects `git rev-list --objects <revs>` lists, each read whole and as git
+    stores it, one at a time, with no patch and no display setting between.
+    A blob is handed on as a file is; a tree gives its entries' names, a commit
+    or a tag its whole text. A new Git LFS pointer refuses, removing one does not."""
+    git = ["git", "-C", str(repo)]
+    said, names, files = [], set(), []
+    with tempfile.TemporaryDirectory() as copy:
+        with (subprocess.Popen([*git, "rev-list", "--objects", *revs], stdout=subprocess.PIPE, env=_env()) as lister,
+              subprocess.Popen([*git, "cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"],
+                               stdin=lister.stdout, stdout=subprocess.PIPE, env=_env()) as reader):
+            lister.stdout.close()
+            for head in iter(reader.stdout.readline, b""):
+                oid, kind, size, name = [*head[:-1].split(b" ", 3), b"", b""][:4]
+                if not size.isdigit():  # an object this clone lacks
+                    raise Refused(f"git cat-file: {head.decode(errors='replace').strip()}")
+                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), name.decode(errors="replace")
+                if kind == b"blob" and data.startswith(b"version https://git-lfs"):
+                    raise Refused(f"{name!r} is a Git LFS pointer, whose content goes outside git, past this check")
+                if kind == b"blob":
+                    _hand(copy, files, name, data)
+                elif kind == b"tree":
+                    while data:
+                        entry, _, data = data.partition(b"\0")
+                        names.add(entry.split(b" ", 1)[1])
+                        data = data[len(oid) // 2:]
+                else:
+                    said.append(data)
+        if lister.returncode or reader.returncode:
+            raise Refused(f"git could not list or read the objects of {' '.join(revs)}")
+        try:
+            _scan(b"\n".join([*said, *sorted(names), b""]).decode())
+        except UnicodeDecodeError:
+            raise Refused("a name or a message is not UTF-8, so it cannot be checked") from None
+        _scan(folder=copy, names=files)
 
 
 def is_public(target: str | None = None) -> bool:

@@ -3,6 +3,7 @@ hands to the scan."""
 
 import pytest
 
+from conftest import LIST
 from jalon import leak
 from jalon.leak import Refused
 
@@ -122,11 +123,13 @@ def test_an_ignore_file_in_the_working_folder_does_not_set_a_finding_aside(priva
 
 
 @needs_gitleaks
-def test_an_ignore_file_in_the_scanned_folder_refuses(private_list, alone):
+def test_an_ignore_file_in_the_scanned_folder_sets_nothing_aside(private_list, alone):
+    # gitleaks is handed a copy under names of jalon's, where it finds no such file: it is one more text.
     (alone / "folder").mkdir()
-    (alone / "folder/a.txt").write_text("a clean line\n")
-    (alone / "folder/.gitleaksignore").write_text("folder/b.txt:private-name:1\n")
-    with pytest.raises(Refused, match="set findings aside"):
+    (alone / "folder/.gitleaksignore").write_text("a.txt:private-name:1\nfolder/a.txt:private-name:1\n")
+    leak.check_dir("folder")  # the control: a clean folder passes with it
+    (alone / "folder/a.txt").write_text("written by Zorblatt\n")
+    with pytest.raises(Refused, match="private-name"):
         leak.check_dir("folder")
 
 
@@ -181,10 +184,10 @@ def test_the_folder_scan_reads_the_bytes_it_checks(private_list, alone, monkeypa
     (folder / "a.txt").write_text("written by Zorblatt\n")
     real = leak._scan
 
-    def later(mode, **kwargs):
-        if mode[0] == "dir":
+    def later(*text, **kwargs):
+        if kwargs.get("folder"):
             (folder / "a.txt").chmod(0)
-        return real(mode, **kwargs)
+        return real(*text, **kwargs)
     monkeypatch.setattr(leak, "_scan", later)
     try:
         with pytest.raises(Refused, match="private-name"):
@@ -193,46 +196,35 @@ def test_the_folder_scan_reads_the_bytes_it_checks(private_list, alone, monkeypa
         (folder / "a.txt").chmod(0o644)
 
 
-# What the commit and folder scans read: settings and shapes that hide content.
+# What the commit scan reads: the objects a push sends, whatever the clone shows.
 
 @needs_gitleaks
-@pytest.mark.parametrize("show_root", ["true", "false"])
-def test_a_root_commit_is_read_whatever_the_clone_shows(private_list, alone, show_root):
-    # Log.showRoot decides whether git log shows a root commit's content.
+@pytest.mark.parametrize("setting, value", [("log.showRoot", "false"), ("color.ui", "always"), ("diff.noprefix", "true")])
+def test_a_commit_is_read_whatever_the_clone_displays(private_list, alone, setting, value):
+    # Each of these changes what `git log -p` prints; none changes an object.
     git(alone, "init", "-q", "-b", "main")
-    git(alone, "config", "log.showRoot", show_root)
+    git(alone, "config", setting, value)
     root = committed(alone, "a.txt", "written by Zorblatt\n")
     with pytest.raises(Refused, match="private-name"):
-        leak.check_commits(alone, [root])
-    clean = committed(alone, "b.txt", "a clean line\n")
-    leak.check_commits(alone, [clean, "--not", root])  # the control: an ordinary commit after it
-
-
-@needs_gitleaks
-@pytest.mark.parametrize("colour", ["auto", "always"])
-def test_a_commit_is_read_whatever_colours_the_clone_sets(private_list, alone, colour):
-    # Colour escapes inside a line would split the listed words the rules match.
-    git(alone, "init", "-q", "-b", "main")
-    git(alone, "config", "color.ui", colour)
-    root = committed(alone, "a.txt", "written by Zorblatt\n")
-    with pytest.raises(Refused, match="private-name"):
-        leak.check_commits(alone, [root])
+        leak.check_commits(alone, [root])  # a first commit
     clean = committed(alone, "b.txt", "a clean line\n")
     leak.check_commits(alone, [clean, "--not", root])  # the control: a clean commit passes
-    later = committed(alone, "c.txt", "written by Zorblatt\n")
+    later = committed(alone, "c.txt", "also written by Zorblatt\n")
     with pytest.raises(Refused, match="private-name"):
         leak.check_commits(alone, [later, "--not", clean])
 
 
 @needs_gitleaks
-def test_a_name_is_read_as_git_stores_it(private_list, alone):
-    # A carriage return in a name reaches the rules as it is, not as a line break.
-    private_list.write_text(private_list.read_text() + "\n[[rules]]\nid = \"private-return\"\nregex = 'Zorb\\rlatt'\n")
+@pytest.mark.parametrize("name, rule", [("Zorb\rlatt", r"Zorb\rlatt"), ("Zorb\\latt.txt", r"Zorb\\latt"),
+                                        ("notes\nZorblatt.txt", "Zorblatt")])
+def test_a_name_is_read_as_git_stores_it(private_list, alone, name, rule):
+    # A carriage return, a backslash, a line break: a tree holds the name as it is.
+    private_list.write_text(LIST.replace("'''Zorblatt'''", f"'''{rule}'''"))
     git(alone, "init", "-q", "-b", "main")
     base = committed(alone, "a.txt", "a clean line\n")
     leak.check_commits(alone, [base])  # the control: a plain name passes
-    tip = committed(alone, "Zorb\rlatt", "a clean line\n")
-    with pytest.raises(Refused, match="private-return"):
+    tip = committed(alone, name, "a clean line\n")
+    with pytest.raises(Refused, match="private-name"):
         leak.check_commits(alone, [tip, "--not", base])
 
 
@@ -240,33 +232,91 @@ POINTER = "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n"
 
 
 @needs_gitleaks
-def test_a_push_that_introduces_or_changes_an_lfs_pointer_is_refused(private_list, alone):
-    # Replacing a pointer's object changes its oid line, not its version line.
+@pytest.mark.parametrize("removal", ["deleted", "replaced by its content"])
+def test_a_new_or_changed_lfs_pointer_is_refused_and_its_removal_passes(private_list, alone, removal):
+    # A pointer's content goes to another server. Removing one sends nothing there.
     git(alone, "init", "-q", "-b", "main")
     base = committed(alone, "a.txt", "a clean line\n")
     added = committed(alone, "data.csv", POINTER.format("a" * 64))
-    with pytest.raises(Refused, match="Git LFS pointer"):
+    with pytest.raises(Refused, match="'data.csv' is a Git LFS pointer"):
         leak.check_commits(alone, [added, "--not", base])
     changed = committed(alone, "data.csv", POINTER.format("b" * 64))
     with pytest.raises(Refused, match="Git LFS pointer"):
         leak.check_commits(alone, [changed, "--not", added])
     docs = committed(alone, "README.md", "a clean line\n")
     leak.check_commits(alone, [docs, "--not", changed])  # a stated limit: that pointer is already public
+    if removal == "deleted":
+        git(alone, "rm", "-q", "data.csv")
+        git(alone, "commit", "-q", "-m", "no dataset")
+        gone = git(alone, "rev-parse", "HEAD")
+    else:
+        gone = committed(alone, "data.csv", "a,b\n1,2\n")
+    leak.check_commits(alone, [gone, "--not", docs])
+
+
+# What both scans read: every text, whatever it is called and however it is encoded.
+
+def both_scans(alone, path, data):
+    """A folder that holds `data` at `path`, and a commit that adds it; returns
+    the folder and the range."""
+    if not (alone / ".git").exists():
+        git(alone, "init", "-q", "-b", "main")
+        committed(alone, "first.txt", "a clean line\n")
+    base = git(alone, "rev-parse", "HEAD")
+    for top in (alone, alone / "folder"):
+        (top / path).parent.mkdir(parents=True, exist_ok=True)
+        (top / path).write_bytes(data)
+    git(alone, "add", "-f", path)
+    git(alone, "commit", "-q", "-m", "a commit")
+    return alone / "folder", [git(alone, "rev-parse", "HEAD"), "--not", base]
 
 
 @needs_gitleaks
-def test_a_path_rule_sees_a_link_as_it_sees_a_file(private_list, alone):
-    # A rule on paths alone, on a stored link and on a regular file.
-    private_list.write_text(private_list.read_text() + '\n[[rules]]\nid = "private-path"\npath = """secret-notes"""\n')
-    folder = alone / "folder"
-    folder.mkdir()
-    (folder / "a.txt").write_text("a clean line\n")
-    (folder / "allowed-link").symlink_to("a.txt")
-    leak.check_dir(folder)  # the control: an allowed path
-    (folder / "secret-notes").symlink_to("a.txt")
-    with pytest.raises(Refused, match="private-path"):
-        leak.check_dir(folder)
-    (folder / "secret-notes").unlink()
-    (folder / "secret-notes").write_text("a clean line\n")
-    with pytest.raises(Refused, match="private-path"):
-        leak.check_dir(folder)
+@pytest.mark.parametrize("path", ["package-lock.json", "notes.svg", "node_modules/x.txt"])
+def test_no_path_sets_a_text_aside(private_list, alone, path):
+    # gitleaks' own rules skip such paths; it is handed none.
+    folder, revs = both_scans(alone, path, b"a clean line\n")
+    leak.check_dir(folder)
+    leak.check_commits(alone, revs)
+    folder, revs = both_scans(alone, path, b"written by Zorblatt\n")
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
+        with pytest.raises(Refused, match="private-name") as refusal:
+            scan()
+        assert f"file 0 is {path!r}" in str(refusal.value) or f"file 1 is {path!r}" in str(refusal.value)  # by its own path
+
+
+@needs_gitleaks
+@pytest.mark.parametrize("mark, encoding", [(b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")])
+def test_a_utf_16_text_is_decoded_once(private_list, alone, capsys, mark, encoding):
+    folder, revs = both_scans(alone, "export.csv", mark + "a clean line\n".encode(encoding))
+    leak.check_dir(folder)
+    leak.check_commits(alone, revs)
+    folder, revs = both_scans(alone, "export.csv", mark + "written by Zorblatt\n".encode(encoding))
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
+        with pytest.raises(Refused, match="private-name"):
+            scan()
+    assert "not read" not in capsys.readouterr().err
+
+
+@needs_gitleaks
+def test_a_text_in_another_encoding_is_named_and_its_bytes_still_go(private_list, alone, capsys):
+    # Latin-1 is not UTF-8: the file is named as not read. A name written
+    # plainly in its bytes is still matched; an accented one would not be.
+    folder, revs = both_scans(alone, "notes.txt", "café, written by Zorblatt\n".encode("latin-1"))
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
+        with pytest.raises(Refused, match="private-name"):
+            scan()
+        assert "jalon: not read, as it is not text: 'notes.txt'" in capsys.readouterr().err
+
+
+@needs_gitleaks
+def test_a_rule_on_paths_alone_is_not_applied(private_list, alone):
+    # A stated limit: gitleaks is handed no path. A name is matched as text.
+    private_list.write_text(LIST + '\n[[rules]]\nid = "private-path"\npath = """secret-notes"""\n')
+    folder, revs = both_scans(alone, "secret-notes", b"a clean line\n")
+    leak.check_dir(folder)
+    leak.check_commits(alone, revs)
+    private_list.write_text(LIST.replace("Zorblatt", "secret-notes"))
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
+        with pytest.raises(Refused, match="private-name"):
+            scan()
