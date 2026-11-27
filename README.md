@@ -22,8 +22,9 @@ Nothing private may reach a public repository: not in a file, a commit
 message, an author line, or an issue jalon files. The check is gitleaks with
 one rule file kept outside every repository, `~/.config/jalon/private.toml`
 (or the file `JALON_PRIVATE_LIST` names): gitleaks' default rules plus the
-owner's own names. Only that file can set a finding aside: `gitleaks:allow`
-comments are ignored, and a `.gitleaksignore` in what is scanned refuses. A
+owner's own names. Only that file can set a finding aside: a `gitleaks:allow`
+comment is ignored, and so is a `.gitleaksignore`, in the working folder or
+in what is scanned. A
 machine without that file cannot send anything to a public repository
 through jalon. A repository GitHub does not report as `PRIVATE` is public.
 
@@ -34,11 +35,19 @@ The check does not catch:
   in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
   is named in the output, `jalon: not read, as it is not text: '<name>'`, and
   does not change the result. Archives are not opened. The bytes of such a
-  file still go to gitleaks, which matches a name written in them plainly;
-- a rule of the list on paths alone, which is not applied: gitleaks receives
-  each text under a number, so that none of its own rules sets a file aside
-  by its path, as they do a lock file, an `.svg` or `node_modules`. A name is
-  matched as text, in a file's name as in its content;
+  file are still handed to gitleaks, and jalon does not check what gitleaks
+  makes of them. In a push, a file is named by the path git lists it under:
+  one path where it sits at several, and up to a line break;
+- what a rule finds by a file's path: gitleaks receives each text under a
+  number, so that none of its own rules sets a file aside by its path, as
+  they do a lock file, an `.svg` or `node_modules`. No rule with a path then
+  works as written, whether the path stands alone or beside a pattern: not
+  one of the list's, and not those of gitleaks' own that go by a file's name
+  (with gitleaks 8.30.1, a password in a NuGet configuration and a PKCS12
+  file pass). A name is matched as text, in a file's path as in its content;
+- a rule written for one shape of a commit's own text: a commit and a tag
+  are read as git stores them, where the author's line opens with `author `;
+  and a commit whose text is not UTF-8 is refused, clean or not;
 - a later push from a repository whose Git LFS content is already public: a
   push that introduces or changes an LFS pointer is refused, and the next one
   that changes none is not;

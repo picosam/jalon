@@ -80,11 +80,12 @@ def _hand(copy: str, names: list[str], name: str, data: bytes) -> None:
     wide = data[:2] in (b"\xff\xfe", b"\xfe\xff")
     try:
         text = data.decode("utf-16" if wide else "utf-8")
+        data = text.encode() if wide else data
     except UnicodeDecodeError:
         text = "\0"
-    if "\0" in text:
+    if "\0" in text:  # undecoded, or a NUL in it: not known to be text
         print(f"jalon: not read, as it is not text: {name!r}", file=sys.stderr)
-    Path(copy, str(len(names))).write_bytes(text.encode() if wide and "\0" not in text else data)
+    Path(copy, str(len(names))).write_bytes(data)
     names.append(name)
 
 
@@ -99,7 +100,6 @@ def check_dir(path: Path | str) -> None:
     that cannot be read, or an entry that is neither a file, a folder nor a
     link, refuses: what is not read is not known to be clean."""
     root = Path(path)
-
     def unreadable(error: OSError) -> None:
         raise Refused(f"cannot read {error.filename}: {error.strerror}")
 
@@ -127,7 +127,7 @@ def check_commits(repo: Path | str, revs: list[str]) -> None:
     """What a push of the commits `git rev-list <revs>` selects would send: the
     objects `git rev-list --objects <revs>` lists, each read whole and as git
     stores it, one at a time, with no patch and no display setting between.
-    A blob is handed on as a file is; a tree gives its entries' names, a commit
+    A blob is handed on as a file is; a tree gives its entries' paths, a commit
     or a tag its whole text. A new Git LFS pointer refuses, removing one does not."""
     git = ["git", "-C", str(repo)]
     said, names, files = [], set(), []
@@ -137,18 +137,18 @@ def check_commits(repo: Path | str, revs: list[str]) -> None:
                                stdin=lister.stdout, stdout=subprocess.PIPE, env=_env()) as reader):
             lister.stdout.close()
             for head in iter(reader.stdout.readline, b""):
-                oid, kind, size, name = [*head[:-1].split(b" ", 3), b"", b""][:4]
+                oid, kind, size, path = [*head[:-1].split(b" ", 3), b"", b""][:4]
                 if not size.isdigit():  # an object this clone lacks
                     raise Refused(f"git cat-file: {head.decode(errors='replace').strip()}")
-                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), name.decode(errors="replace")
-                if kind == b"blob" and data.startswith(b"version https://git-lfs"):
+                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), path.decode(errors="replace")
+                if kind == b"blob" and data.startswith((b"version https://git-lfs", b"version https://hawser")):
                     raise Refused(f"{name!r} is a Git LFS pointer, whose content goes outside git, past this check")
                 if kind == b"blob":
                     _hand(copy, files, name, data)
                 elif kind == b"tree":
                     while data:
                         entry, _, data = data.partition(b"\0")
-                        names.add(entry.split(b" ", 1)[1])
+                        names.add((path + b"/" if path else b"") + entry.split(b" ", 1)[1])  # from the top
                         data = data[len(oid) // 2:]
                 else:
                     said.append(data)

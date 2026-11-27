@@ -216,13 +216,15 @@ def test_a_commit_is_read_whatever_the_clone_displays(private_list, alone, setti
 
 @needs_gitleaks
 @pytest.mark.parametrize("name, rule", [("Zorb\rlatt", r"Zorb\rlatt"), ("Zorb\\latt.txt", r"Zorb\\latt"),
-                                        ("notes\nZorblatt.txt", "Zorblatt")])
+                                        ("notes\nZorblatt.txt", "Zorblatt"), ("Zorb/latt.txt", "Zorb/latt")])
 def test_a_name_is_read_as_git_stores_it(private_list, alone, name, rule):
-    # A carriage return, a backslash, a line break: a tree holds the name as it is.
+    # A carriage return, a backslash, a line break: a tree holds the name as it is. And a name that spans a
+    # folder and a file is read as one path, from the top of the repository.
     private_list.write_text(LIST.replace("'''Zorblatt'''", f"'''{rule}'''"))
     git(alone, "init", "-q", "-b", "main")
     base = committed(alone, "a.txt", "a clean line\n")
     leak.check_commits(alone, [base])  # the control: a plain name passes
+    (alone / name).parent.mkdir(exist_ok=True)
     tip = committed(alone, name, "a clean line\n")
     with pytest.raises(Refused, match="private-name"):
         leak.check_commits(alone, [tip, "--not", base])
@@ -252,6 +254,9 @@ def test_a_new_or_changed_lfs_pointer_is_refused_and_its_removal_passes(private_
     else:
         gone = committed(alone, "data.csv", "a,b\n1,2\n")
     leak.check_commits(alone, [gone, "--not", docs])
+    old = committed(alone, "old.csv", POINTER.format("c" * 64).replace("git-lfs.github.com", "hawser.github.com"))
+    with pytest.raises(Refused, match="'old.csv' is a Git LFS pointer"):
+        leak.check_commits(alone, [old, "--not", gone])  # the format Git LFS still reads from before its release
 
 
 # What both scans read: every text, whatever it is called and however it is encoded.
@@ -296,6 +301,11 @@ def test_a_utf_16_text_is_decoded_once(private_list, alone, capsys, mark, encodi
         with pytest.raises(Refused, match="private-name"):
             scan()
     assert "not read" not in capsys.readouterr().err
+    # With a NUL in it the text is named, since it may not be text, and is still read as decoded.
+    folder, revs = both_scans(alone, "export.csv", mark + "written by Zorblatt\n\0".encode(encoding))
+    for scan in (lambda: leak.check_dir(folder), lambda: leak.check_commits(alone, revs)):
+        with pytest.raises(Refused, match="private-name"):
+            scan()
 
 
 @needs_gitleaks
@@ -310,9 +320,11 @@ def test_a_text_in_another_encoding_is_named_and_its_bytes_still_go(private_list
 
 
 @needs_gitleaks
-def test_a_rule_on_paths_alone_is_not_applied(private_list, alone):
-    # A stated limit: gitleaks is handed no path. A name is matched as text.
-    private_list.write_text(LIST + '\n[[rules]]\nid = "private-path"\npath = """secret-notes"""\n')
+@pytest.mark.parametrize("pattern", ["", 'regex = """clean"""\n'])
+def test_no_rule_with_a_path_is_applied(private_list, alone, pattern):
+    # A stated limit: gitleaks is handed a number, not a path, so a rule with a path, alone or beside a
+    # pattern, does not fire. A name is matched as text.
+    private_list.write_text(LIST + f'\n[[rules]]\nid = "private-path"\npath = """secret-notes"""\n{pattern}')
     folder, revs = both_scans(alone, "secret-notes", b"a clean line\n")
     leak.check_dir(folder)
     leak.check_commits(alone, revs)
