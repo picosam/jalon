@@ -7,7 +7,7 @@ a missing gitleaks, or a gitleaks that fails: nothing passes without a clean
 scan.
 
 A destination is public unless GitHub says it is private. One that cannot be
-read counts as public.
+read counts as public; so does a push's destination not written as an address.
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ def _held(repo: Path | str, url: str) -> tuple[list[str], bool]:
         listed = _git(repo, "ls-remote", url)
     except Refused as refusal:
         raise Refused(f"cannot read what {url} holds: {refusal}") from None
-    ids = sorted({line.split()[0] for line in listed.splitlines() if line.strip()})
+    ids = sorted({line.split()[0] for line in listed.split("\n") if line.strip()})  # a ref's name may hold U+2028
     found = _git(repo, "cat-file", "--batch-check=%(objectname) %(objecttype)",
                  input="".join(f"{id}^{{commit}}\n" for id in ids))
     held = sorted({line.split()[0] for line in found.splitlines() if line.endswith(" commit")})
@@ -205,13 +205,14 @@ def pre_push(remote: str, url: str, lines: list[str], repo: Path | str = ".") ->
     its standard input, one `<local ref> <local id> <remote ref> <remote id>`
     per ref. Scans what each ref would add to the destination: the commits it
     does not hold, the ref's own name, and every tag object on the way."""
-    if not is_public(url):
+    # Only an address is asked: gh reads `team/records` as a repository on GitHub, where git reads a folder.
+    if re.match(r"[a-zA-Z][\w+.-]*://|[^/:@]+@[^/:]+:", url) and not is_public(url):  # scheme://, or user@host:
         return
     if not list_path().is_file():  # even a push that adds nothing, such as a deletion
         raise Refused(f"no private list at {list_path()}: nothing goes to a public repository from this machine")
     updates = []
     for line in lines:
-        fields = line.split()
+        fields = line.split(" ") if line else []  # git's separators: a ref name may hold other spaces
         if not fields:
             continue
         if len(fields) != 4:

@@ -27,6 +27,10 @@ comment is ignored, and so is a `.gitleaksignore`, in the working folder or
 in what is scanned. A
 machine without that file cannot send anything to a public repository
 through jalon. A repository GitHub does not report as `PRIVATE` is public.
+A push's destination is asked of GitHub only when it is written as an
+address, `<scheme>://…` or `user@host:path`. Any other is scanned without
+asking: `gh` would read a folder named `team/records` as a repository of
+that name.
 A list that extends another file names it by its full path: jalon runs
 gitleaks from a folder of its own, where a relative path is not found, and a
 folder or a push is then refused, clean or not.
@@ -100,6 +104,9 @@ The check does not catch:
   same file under a new name is not read again, though its new name is;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
+- what a `pre-push` hook registered in git's configuration does
+  (`hook.<name>.event`): git runs it before the check, and `jalon push`
+  orders the repository's hook file only;
 - git push options (`git push -o`), which `jalon push` passes to the
   destination unchecked;
 - a `jalon` command that is not jalon: it is an ordinary Python program, so a
@@ -120,7 +127,10 @@ takes longer: about 10 seconds for 1,000 commits of 2,000 files.
 git's output. What git removes or refuses is git's to decide, in every state
 of the checkout, and jalon looks at none of them: a file of that name that
 is not the record, an edit that is staged, a file already gone from the
-folder, a flag set on the index, a `decisions/` that is a link.
+folder, a flag set on the index, a `decisions/` that is a link. Nor does
+`park close`, with `--replaces` or without, look at where it writes: its
+record and its index line go through a `decisions/` that is a link, wherever
+it leads.
 
 A deposit in a project's inbox folder is deleted with `rm`, once it is filed
 or set aside: jalon has no command for it.

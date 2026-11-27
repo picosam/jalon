@@ -185,7 +185,7 @@ def _ruled(item: str) -> bool:
 def _index(root: Path) -> list[dict]:
     index = root / "index.jsonl"
     text = index.read_text(encoding="utf-8") if index.exists() else ""
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    return [json.loads(line) for line in text.split("\n") if line.strip()]  # a title may hold U+2028
 
 
 def _write(path: Path, text: str) -> None:

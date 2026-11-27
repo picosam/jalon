@@ -31,11 +31,12 @@ def calls(standin, key):
 
 @pytest.fixture
 def repo(alone, outside, tmp_path):
-    """A clone with one pushed commit and a bare remote GitHub calls public."""
+    """A clone with one pushed commit and a bare remote GitHub calls public,
+    named as an address: only an address is asked of GitHub."""
     remote = tmp_path / "remote.git"
     run("git", "init", "-q", "--bare", "-b", "main", remote)
     run("git", "init", "-q", "-b", "main", alone)
-    run("git", "remote", "add", "origin", remote, cwd=alone)
+    run("git", "remote", "add", "origin", remote.as_uri(), cwd=alone)
     commit(alone, "first.txt", "a clean line\n", "the first commit")
     assert run("git", "push", "-q", "origin", "main", cwd=alone).returncode == 0
     run("git", "fetch", "-q", "origin", cwd=alone)
@@ -271,6 +272,25 @@ def test_a_private_destination_is_not_scanned(repo, outside):
     assert remote_tip(repo) == [tip]
 
 
+@pytest.mark.parametrize("listed", [False, True])
+def test_a_destination_not_written_as_an_address_is_scanned_without_asking(repo, outside, private_list, listed):
+    # gh would read team/records as a repository on GitHub, and call it private; git reads a folder of the clone.
+    answer(outside, "repo-view", "PRIVATE\n")
+    run("git", "init", "-q", "--bare", "-b", "main", repo / "team/records")
+    run("git", "remote", "set-url", "origin", "team/records", cwd=repo)
+    assert run("git", "push", "-q", "origin", "main", cwd=repo).returncode == 0
+    before = remote_tip(repo)
+    tip = commit(repo, "second.txt", f"written by {NAME if listed else 'someone'}\n", "the second commit")
+    done = run("jalon", "push", "origin", "main", cwd=repo)
+    if listed:
+        assert done.returncode == 1 and "private-name" in done.stderr
+        assert remote_tip(repo) == before
+    else:
+        assert done.returncode == 0, done.stderr
+        assert remote_tip(repo) == [tip]
+    assert calls(outside, "repo view") == []
+
+
 def test_only_the_commits_being_pushed_are_scanned(repo, outside, private_list):
     # A listed name already on the remote, pushed while it was private.
     answer(outside, "repo-view", "PRIVATE\n")
@@ -385,6 +405,22 @@ def test_a_remote_pointed_elsewhere_scans_what_the_new_destination_lacks(repo, o
     done = run("jalon", "push", "origin", "main", cwd=repo)
     assert done.returncode == 1 and "private-name" in done.stderr
     assert remote_tip(repo) == []
+
+
+@pytest.mark.parametrize("name, refused", [("for\u00a0someone", False), (f"for\u00a0{NAME}", True),
+                                           ("for\u2028someone", False), (f"for\u2028{NAME}", True)])
+def test_a_branch_name_with_another_space_or_line_break_is_read_whole(repo, private_list, name, refused):
+    # git allows a no-break space and U+2028 in a branch name; the hook's input is split at spaces and line
+    # feeds only.
+    tip = commit(repo, "second.txt", "a clean line\n", "the second commit")
+    run("git", "branch", name, cwd=repo)
+    done = run("jalon", "push", "origin", name, cwd=repo)
+    if refused:
+        assert done.returncode == 1 and "private-name" in done.stderr
+        assert remote_tip(repo, f"refs/heads/{name}") == []
+    else:
+        assert done.returncode == 0, done.stderr
+        assert remote_tip(repo, f"refs/heads/{name}") == [tip]
 
 
 def test_a_name_on_a_ref_stops_its_push_even_on_a_commit_already_there(repo, private_list):

@@ -367,6 +367,17 @@ def test_a_decision_already_replaced_cannot_be_replaced_again(gh, checkout):
     assert [(row["number"], row["replaced_by"]) for row in rows(checkout)] == [(7, 9), (9, 11), (11, None)]
 
 
+@pytest.mark.parametrize("title", ["Which option?", "Which\u2028option?"])
+def test_a_title_with_a_line_separator_stays_one_line_of_the_index(gh, checkout, title):
+    # The index is written with U+2028 as it is, so it is read at line feeds only.
+    ruled(gh, 7, title=title)
+    park.close(7, record(checkout), "which-option")
+    ruled(gh, 9)
+    park.close(9, record(checkout), "another-option")
+    assert [(row["number"], row["title"]) for row in park._index(checkout / "decisions")] == [(7, title),
+                                                                                             (9, "Question 9?")]
+
+
 def test_close_refuses_to_replace_a_decision_the_index_does_not_hold(gh, checkout):
     ruled(gh, 7)
     with pytest.raises(Refused, match="#5 is not in"):
