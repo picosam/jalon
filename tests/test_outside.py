@@ -5,8 +5,11 @@ that guards the boundary no private thing may cross.
 Nothing here imports the tool. gitleaks and git are the real ones.
 """
 
+import base64
+import io
 import json
 import shutil
+import zipfile
 
 import pytest
 
@@ -469,17 +472,23 @@ def test_a_file_whose_diff_is_turned_off_is_still_read(repo, private_list, liste
         assert remote_tip(repo) == [tip]
 
 
-def test_a_merge_of_more_than_two_parents_is_refused(repo, private_list):
-    # Remerge reads two parents only, so an octopus is refused by its shape.
+@pytest.mark.parametrize("resolution, refused", [("a resolved line\n", False), (f"resolved by {NAME}\n", True)])
+def test_a_merge_of_three_parents_is_read_for_what_it_adds(repo, private_list, resolution, refused):
+    # The three parents are clean; the merge commit itself adds a file.
     for side in ("one", "two"):
         run("git", "checkout", "-q", "-b", side, "main", cwd=repo)
         commit(repo, f"{side}.txt", "a clean line\n", side)
     run("git", "checkout", "-q", "main", cwd=repo)
     commit(repo, "main.txt", "a clean line\n", "main's own")
-    assert run("git", "merge", "-q", "-m", "octopus", "one", "two", cwd=repo).returncode == 0
+    assert run("git", "merge", "-q", "--no-commit", "one", "two", cwd=repo).returncode == 0
+    tip = commit(repo, "merged.txt", resolution, "merged")
     assert len(run("git", "rev-parse", "HEAD^@", cwd=repo).stdout.split()) == 3
     done = run("jalon", "push", "origin", "main", cwd=repo)
-    assert done.returncode == 1 and "more than two parents" in done.stderr
+    if refused:
+        assert done.returncode == 1 and "private-name" in done.stderr
+    else:
+        assert done.returncode == 0, done.stderr
+        assert remote_tip(repo) == [tip]
 
 
 ACCENTED = '\n[[rules]]\nid = "accented-name"\nregex = """Zörblatt"""\n'
@@ -519,14 +528,13 @@ def test_a_refusal_says_when_the_destination_is_ahead_of_this_clone(repo, outsid
     assert done.returncode == 1 and "fetch, then push again" in done.stderr
 
 
-def test_a_git_lfs_pointer_is_refused_before_the_repositorys_hook_runs(repo, private_list):
-    # An LFS pointer is clean; its content goes to the LFS server, which this check never reads.
+def test_a_refusal_comes_before_the_repositorys_own_hook_runs(repo, private_list):
+    # The repository's hook may send content elsewhere, as Git LFS's does: it does not run on a refused push.
     beside = own_hook(repo, 0)
     before = remote_tip(repo)
-    commit(repo, "data.csv", "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a" * 64 + "\nsize 12\n",
-           "a dataset")
+    commit(repo, "data.csv", f"written by {NAME}\n", "a dataset")
     done = run("jalon", "push", "origin", "main", cwd=repo)
-    assert done.returncode == 1 and "Git LFS pointer" in done.stderr
+    assert done.returncode == 1 and "private-name" in done.stderr
     assert remote_tip(repo) == before and not (beside / "hook-input").exists()
 
 
@@ -591,6 +599,54 @@ def test_leak_dir_passes_a_clean_folder_and_refuses_a_listed_name(outside, alone
     (alone / "folder/b.txt").write_text(f"a line about {NAME}\n")
     done = run("jalon", "leak", "dir", "folder")
     assert done.returncode == 1 and "private-name" in done.stderr
+
+
+# A ZIP made by `zip -P`, whose one member holds the listed name.
+LOCKED = base64.b64decode(
+    "UEsDBAoACQAAAKRde12KFpe4IgAAABYAAAAJABwAbm90ZXMudHh0VVQJAANDbQlrQ20Ja3V4CwABBPUBAAAEAAAAAFUWBvfGROZbKJGlxAzJTREFtpD9"
+    "U3J3udP9z7IGqvFBXT5QSwcIihaXuCIAAAAWAAAAUEsBAh4DCgAJAAAApF17XYoWl7giAAAAFgAAAAkAGAAAAAAAAQAAAKSBAAAAAG5vdGVzLnR4dFVU"
+    "BQADQ20Ja3V4CwABBPUBAAAEAAAAAFBLBQYAAAAAAQABAE8AAAB1AAAAAAA=")
+
+
+def not_text(folder):
+    """A ZIP whose text holds the listed name, an image and an encrypted ZIP:
+    none is text, and none is opened. Returns their names."""
+    packed = io.BytesIO()
+    with zipfile.ZipFile(packed, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("notes.txt", f"a line about {NAME}\n" * 50)
+    (folder / "export.zip").write_bytes(packed.getvalue())
+    (folder / "photo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)))
+    (folder / "locked.zip").write_bytes(LOCKED)
+    return ["export.zip", "locked.zip", "photo.png"]
+
+
+@pytest.mark.parametrize("listed", [False, True])
+def test_what_is_not_text_is_named_and_does_not_decide(repo, private_list, tmp_path, listed):
+    # In a folder and in a pushed range: the three are named as not read, and
+    # the exit code is the one the text beside them earns.
+    folder = tmp_path / "export"
+    folder.mkdir()
+    for where in (folder, repo):
+        names = not_text(where)
+        (where / "  spaced.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(255, -1, -1)))
+        names.append("  spaced.png")  # named with its two spaces, in a push as in a folder
+        (where / "notes.txt").write_text(f"written by {NAME if listed else 'someone'}\n")
+    run("git", "add", "notes.txt", *names, cwd=repo)
+    assert run("git", "commit", "-q", "-m", "an export", cwd=repo).returncode == 0
+    for done in (run("jalon", "leak", "dir", folder), run("jalon", "push", "origin", "main", cwd=repo)):
+        assert done.returncode == (1 if listed else 0), done.stderr
+        assert ("private-name" in done.stderr) is listed
+        for name in names:
+            assert f"jalon: not read, as it is not text: {name!r}" in done.stderr
+
+
+def test_no_folder_above_the_copy_sets_a_text_aside(outside, alone, private_list, tmp_path):
+    # gitleaks' own rules skip what lies under such a folder; the copy it reads may be made in one.
+    (alone / "folder").mkdir()
+    (alone / "folder/a.txt").write_text(f"a line about {NAME}\n")
+    (tmp_path / "node_modules").mkdir()
+    done = run("jalon", "leak", "dir", "folder", env={"TMPDIR": str(tmp_path / "node_modules")})
+    assert done.returncode == 1 and "private-name" in done.stderr and "file 0 is 'a.txt'" in done.stderr
 
 
 @pytest.mark.parametrize("make", ["file in a named folder", "empty named file", "link to a named path"])

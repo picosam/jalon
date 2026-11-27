@@ -13,7 +13,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 | `skills/scope/` | The `scope` skill: narrows a conversation to one issue an agent can pick up, with nine sections, a checkable "Done when" and a review depth. |
 | `jalon park file` | Files one issue, after checking the nine sections. The check catches a forgotten section or "Done when" line; it is not a guard against hidden or oddly formatted text, and a person reads every issue before it is filed. Without `--repo` it files into the checkout's repository, host included, read with `GH_REPO` left out. |
 | `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; a removal is left staged, and if git refuses, jalon stops and writes no record. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
-| `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list: file contents, file names and link targets, commit messages, authors and committers, and what a merge's resolution adds. |
+| `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list. In a folder: every text file's content, every file name and link target. In commits: the objects a push of them would send, each read whole as git stores it, with no patch in between: each new file, every path of each commit, and each commit's or tag's own text. A file that is not text is named in the output as not read. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 
 ## The private list
@@ -22,20 +22,82 @@ Nothing private may reach a public repository: not in a file, a commit
 message, an author line, or an issue jalon files. The check is gitleaks with
 one rule file kept outside every repository, `~/.config/jalon/private.toml`
 (or the file `JALON_PRIVATE_LIST` names): gitleaks' default rules plus the
-owner's own names. Only that file can set a finding aside: `gitleaks:allow`
-comments are ignored, and a `.gitleaksignore` in what is scanned refuses. A
+owner's own names. Only that file can set a finding aside: a `gitleaks:allow`
+comment is ignored, and so is a `.gitleaksignore`, in the working folder or
+in what is scanned. A
 machine without that file cannot send anything to a public repository
 through jalon. A repository GitHub does not report as `PRIVATE` is public.
+A list that extends another file names it by its full path: jalon runs
+gitleaks from a folder of its own, where a relative path is not found, and a
+folder or a push is then refused, clean or not.
+
+### Where jalon's part ends
+
+jalon decides three things about a scan: which bytes gitleaks is handed,
+decoded how, and under what name.
+
+- **Which bytes.** In a folder: every file, every name and link target. In a
+  push: every file it sends, every path of each commit, each commit's and
+  tag's own text, and each ref's name.
+- **Decoded how.** Bytes that decode as UTF-8, or as UTF-16 when they open
+  with its byte-order mark, are handed on decoded, after one line break.
+  Bytes that do not decode are handed on as they are. A file is named in the
+  output when its bytes do not decode, or hold a NUL: it may not be text.
+  All of this goes by the bytes alone: an archive that happens to decode is
+  handed on as a text is, and a UTF-32 text that opens with UTF-16's mark is
+  decoded as UTF-16.
+- **Under what name.** Each file goes to gitleaks under a number.
+
+What gitleaks then reads of those bytes, and what it matches in them, is
+gitleaks'. jalon makes no claim about it. Known with gitleaks 8.30.1:
+
+- it reads a long text in blocks and matches inside each one: a name that
+  lies across the end of a block is not matched. A text of some tens of
+  thousands of bytes can be long enough;
+- it skips, without a word, what it takes for a binary file by a signature.
+  The line break jalon puts first is there for that: a text that opens with
+  `%PDF`, `{\rtf` or `MZ` is read. A signature that sits further in still
+  makes it skip the text: a tar archive's, 256 bytes into one;
+- it matches every path in the list against the number a file is handed over
+  under, never against the file's own path (see below);
+- a rule's `keywords` can make it pass a spelling the rule's own pattern
+  matches: seen with a Greek name written in the other letter case.
+
+The line break has two costs. For bytes jalon decoded, a line number in a
+refusal is one higher than in the file; for bytes handed on as they are it
+is the file's own. And a rule anchored at the very start of a text no longer
+matches there.
 
 The check does not catch:
 
 - a private fact told in other words, or a name that is not on the list;
-- anything in an image;
-- a file that a rule on paths alone would match, when it is empty or renamed
-  without change: such a rule is applied to files with content;
-- a later push from a repository whose Git LFS content is already public: a
-  push that introduces or changes an LFS pointer is refused, and the next one
-  that changes none is not;
+- a file that is not text: an image, an archive, an office file, or a text
+  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
+  is named in the output, `jalon: not read, as it is not text: '<name>'`.
+  The notice changes nothing by itself: such a file still goes to gitleaks,
+  handed on as said above, the result is what gitleaks makes of it, and
+  jalon does not check that. Archives are not opened: no member is taken
+  out of one. In a push, a file that sits at several paths is named by one
+  of them;
+- what a rule finds by a file's path: gitleaks receives each text under a
+  number, so that none of its own rules sets a file aside by its path, as
+  they do a lock file, an `.svg` or `node_modules`. No rule with a path then
+  works as written, whether the path stands alone or beside a pattern: not
+  one of the list's, and not those of gitleaks' own that go by a file's name
+  (with gitleaks 8.30.1, a password in a NuGet configuration and a PKCS12
+  file pass). The same holds for a path in an allowance, and a path loose
+  enough to match a number applies to the file handed over under it. A name
+  is matched as text, in a file's path as in its content;
+- a rule written for one shape of a commit's own text: a commit and a tag
+  are read as git stores them, where the author's line opens with `author `;
+  and a commit whose text is not UTF-8 is refused, clean or not;
+- content stored with Git LFS: it goes to another server, past this check,
+  and jalon does not look for its pointers. A pointer is one more text;
+- in a folder, a name or a link target that is not UTF-8: it reaches gitleaks
+  with `?` in place of each such byte. In a push, a path that is not UTF-8
+  is refused;
+- content the destination already holds, which a push does not send: the
+  same file under a new name is not read again, though its new name is;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
 - git push options (`git push -o`), which `jalon push` passes to the
@@ -46,6 +108,12 @@ The check does not catch:
   runs. The hook `jalon push` hands to git is isolated from that: it runs the
   jalon that wrote it, whatever the repository being pushed or the
   environment holds.
+
+The commit scan can also refuse what a push does not send. It reads every
+path of each commit it is given, those the destination already holds too: a
+listed name in such a path refuses every push, until a commit renames it
+away. It runs one `git ls-tree` per commit, so a first push of a long history
+takes longer: about 10 seconds for 1,000 commits of 2,000 files.
 
 `park close --replaces` checks nothing about the record it removes: it runs
 `git rm` on `decisions/<number>-*.md` at the top of the checkout and shows
