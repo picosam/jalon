@@ -117,10 +117,10 @@ label:
 Show the whole issue, title, labels and assignee included, and wait for the
 user's word. Then:
 
-    jalon park file --title "<title>" --body-file <file> [--decision] [--parked] --depth <none|quick|full> [--assignee <login>] [--blocked-by <n>] [--parent <n>]
+    jalon park file --repo "$repo" --title "<title>" --body-file <file> [--decision] [--parked] --depth <none|quick|full> [--assignee <login>] [--blocked-by <n>] [--parent <n>]
 
-It files into the checkout's repository, `$repo` above; every `gh` call
-below names it with `--repo "$repo"`.
+It files into `$repo`, the repository the related items were read from, and
+every `gh` call below names it with `--repo "$repo"` too.
 
 **Nothing private reaches a public repository.** On a repository `gh repo
 view "$repo" --json visibility` does not report as `PRIVATE` (one it cannot
@@ -167,9 +167,10 @@ recorded, then the words in double quotes) and `## Would overturn`, and run:
     jalon park close <n> --repo "$repo" --record-file <file> --name <short-name>
 
 Add `--replaces <m>` when it replaces an earlier decision, whose record must
-be committed first: git removes it, `git rm` on `decisions/<m>-*.md`, and
-refuses one that is modified, staged or not tracked. The removal is left
-staged, for the commit that adds the new record. The command refuses a `--repo` that is not this
+be committed first: git removes it, `git rm` on `decisions/<m>-*.md`, shows
+what it removed, and refuses a record it does not track or that differs from
+the last commit. Every file of that name goes. The removal is left staged,
+for the commit that adds the new record. The command refuses a `--repo` that is not this
 checkout's, reads the issue from that repository and refuses one GitHub does
 not show closed as completed; it changes nothing on GitHub. It writes
 `decisions/<n>-<short-name>.md` at the top of the checkout, dated with

@@ -12,7 +12,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 |---|---|
 | `skills/scope/` | The `scope` skill: narrows a conversation to one issue an agent can pick up, with nine sections, a checkable "Done when" and a review depth. |
 | `jalon park file` | Files one issue, after checking the nine sections. The check catches a forgotten section or "Done when" line; it is not a guard against hidden or oddly formatted text, and a person reads every issue before it is filed. Without `--repo` it files into the checkout's repository, host included, read with `GH_REPO` left out. |
-| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`: git refuses a record that is modified, staged or not tracked, and the removal is left staged. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
+| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed: git refuses a record it does not track, or one that differs from the last commit, and the removal is left staged. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
 | `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list: file contents, file names and link targets, commit messages, authors and committers, and what a merge's resolution adds. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 
@@ -47,11 +47,22 @@ The check does not catch:
   jalon that wrote it, whatever the repository being pushed or the
   environment holds.
 
-`park close` leaves two things to git and to the person who runs it. A record
-marked `git update-index --assume-unchanged` is removed as git sees it, an
-uncommitted edit included. And `decisions/` is a plain folder of the
-checkout: if it is a link, a record is written where the link leads, and a
-replacement is refused, since git finds no record of the checkout behind it.
+`park close --replaces` hands the deletion to `git rm`, and what git does is
+what happens:
+
+- every file named `decisions/<number>-*.md` is taken for the replaced
+  decision's record and removed, so nothing else is named that way;
+- a record whose file is already gone from the folder is removed from the
+  index without a word, an edit staged for it included: git keeps that edit
+  only as an object nothing points to;
+- a record marked `git update-index --assume-unchanged` is removed as git sees
+  it, an uncommitted edit included;
+- `decisions/` is a plain folder of the checkout: if it is a link, a record
+  is written where the link leads, and a replacement is refused, since git
+  finds no record of the checkout behind it.
+
+What is removed was committed, and the removal is only staged: `git restore
+--staged --worktree decisions` brings it back until it is committed.
 
 A deposit in a project's inbox folder is deleted with `rm`, once it is filed
 or set aside: jalon has no command for it.
@@ -59,13 +70,15 @@ or set aside: jalon has no command for it.
 ## Before a repository's first `park file`
 
 The issues it files carry labels the repository must hold: `decision`,
-`parked`, and the three review depths. Create them once:
+`parked`, and the three review depths. Create them once, naming the
+repository by its address, which keeps its host:
 
-    gh label create decision --repo <owner/name>
-    gh label create parked --repo <owner/name>
-    gh label create none --repo <owner/name>
-    gh label create quick --repo <owner/name>
-    gh label create full --repo <owner/name>
+    repo=$(gh repo view --json url --jq .url)
+    gh label create decision --repo "$repo"
+    gh label create parked --repo "$repo"
+    gh label create none --repo "$repo"
+    gh label create quick --repo "$repo"
+    gh label create full --repo "$repo"
 
 The `scope` skill is copied from this repository's `skills/scope/` into the
 skills folder of the agent that scopes (for Claude Code, `.claude/skills/scope/`

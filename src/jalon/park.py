@@ -217,12 +217,13 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
     decisions only; `repo`, the one the issue was closed in, must be it.
 
     A decision it replaces loses its record, and git removes it: `git rm`
-    on `decisions/<replaces>-*.md`, before anything is written. The path comes
-    from the decision's number, never from the index, and git refuses a record
-    that is modified, staged or not tracked; the removal is left staged. A
-    record or an index line already there for this decision refuses, named,
-    and nothing changes: a run that stopped part-way is reconciled by a
-    person, with git."""
+    on `decisions/<replaces>-*.md`, before anything is written, and git's own
+    lines say what went. The path comes from the decision's number, never from
+    the index: every file of that name is taken for the record. What git
+    refuses is the check, and the README says what it does not refuse; the
+    removal is left staged. A record or an index line already there for this
+    decision refuses, named, and nothing changes: a run that stopped part-way
+    is reconciled by a person, with git."""
     root = _root()
     repository = _repository()
     if repo is not None and repo != repository:
@@ -271,7 +272,7 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
             if older["replaced_by"] is not None:
                 raise Refused(f"#{replaces} was already replaced by #{older['replaced_by']}")
             gone = subprocess.run(["git", "-C", str(root.parent), "rm", "--", f":(glob)decisions/{replaces}-*.md"],
-                                  capture_output=True, text=True)
+                                  stdout=2, stderr=subprocess.PIPE, text=True)  # its own lines are shown
             if gone.returncode != 0:
                 raise Refused(f"git did not remove the record of #{replaces}, so nothing changes: {gone.stderr.strip()}")
         _write(target, text)

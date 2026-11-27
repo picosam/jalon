@@ -192,6 +192,7 @@ def test_park_close_leaves_the_replaced_records_deletion_to_git(outside, alone, 
     else:
         assert done.returncode == 0, done.stderr
         assert not old.exists() and (alone / "decisions/9-which-option-again.md").exists()
+        assert "rm 'decisions/7-which-option.md'" in done.stderr  # git's own line says what went
         assert run("git", "status", "--short", "decisions/7-which-option.md", cwd=alone).stdout[:2] == "D "
         for kept in ("keep.md", "decisions/8-other.md"):
             assert (alone / kept).read_bytes() == b"kept\n"
