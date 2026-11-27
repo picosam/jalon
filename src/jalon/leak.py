@@ -128,12 +128,13 @@ def check_commits(repo: Path | str, revs: list[str]) -> None:
     """What a push of the commits `git rev-list <revs>` selects would send: the
     objects `git rev-list --objects <revs>` lists, each read whole and as git
     stores it, one at a time, with no patch and no display setting between.
-    A blob is handed on as a file is, a commit or a tag as its whole text. The paths are those of each
-    commit, every one, the destination's too. A new Git LFS pointer refuses, removing one does not."""
+    A blob is handed on as a file is, a commit or a tag as its whole text.
+    The paths are those of each commit, every one, the destination's too:
+    from the top of the repository, a folder that holds nothing included."""
     git = ["git", "-C", str(repo)]
     said, where, files = [], {}, []
     for commit in _git(repo, "rev-list", *revs).split():
-        for entry in _git(repo, "ls-tree", "-r", "-z", commit).split("\0")[:-1]:
+        for entry in _git(repo, "ls-tree", "-r", "-t", "-z", "--full-tree", commit).split("\0")[:-1]:
             where.setdefault(entry.split(maxsplit=3)[2], set()).add(entry.partition("\t")[2])  # an object's paths
     with tempfile.TemporaryDirectory() as copy:
         with (subprocess.Popen([*git, "rev-list", "--objects", "--no-object-names", *revs], stdout=subprocess.PIPE,
@@ -145,11 +146,9 @@ def check_commits(repo: Path | str, revs: list[str]) -> None:
                 oid, kind, size = [*head.decode().split(), ""][:3]
                 if not size.isdigit():  # an object this clone lacks
                     raise Refused(f"git cat-file: {head.decode().strip()}")
-                data, _, name = reader.stdout.read(int(size)), reader.stdout.read(1), min(where.get(oid, [oid]))
-                if kind == "blob" and data.startswith((b"version https://git-lfs", b"version https://hawser")):
-                    raise Refused(f"{name!r} is a Git LFS pointer, whose content goes outside git, past this check")
+                data, _ = reader.stdout.read(int(size)), reader.stdout.read(1)
                 if kind == "blob":
-                    _hand(copy, files, name, data)
+                    _hand(copy, files, min(where.get(oid, [oid])), data)  # one path, where it sits at several
                 elif kind != "tree":
                     said.append(data)
         if lister.returncode or reader.returncode:

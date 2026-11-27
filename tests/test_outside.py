@@ -528,14 +528,13 @@ def test_a_refusal_says_when_the_destination_is_ahead_of_this_clone(repo, outsid
     assert done.returncode == 1 and "fetch, then push again" in done.stderr
 
 
-def test_a_git_lfs_pointer_is_refused_before_the_repositorys_hook_runs(repo, private_list):
-    # An LFS pointer is clean; its content goes to the LFS server, which this check never reads.
+def test_a_refusal_comes_before_the_repositorys_own_hook_runs(repo, private_list):
+    # The repository's hook may send content elsewhere, as Git LFS's does: it does not run on a refused push.
     beside = own_hook(repo, 0)
     before = remote_tip(repo)
-    commit(repo, "data.csv", "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a" * 64 + "\nsize 12\n",
-           "a dataset")
+    commit(repo, "data.csv", f"written by {NAME}\n", "a dataset")
     done = run("jalon", "push", "origin", "main", cwd=repo)
-    assert done.returncode == 1 and "Git LFS pointer" in done.stderr
+    assert done.returncode == 1 and "private-name" in done.stderr
     assert remote_tip(repo) == before and not (beside / "hook-input").exists()
 
 

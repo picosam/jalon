@@ -43,8 +43,7 @@ decoded how, and under what name.
 - **Under what name.** Each file goes to gitleaks under a number.
 
 What gitleaks then reads of those bytes, and what it matches in them, is
-gitleaks'. jalon makes no claim about it and does not work around it. Known
-with gitleaks 8.30.1:
+gitleaks'. jalon makes no claim about it. Known with gitleaks 8.30.1:
 
 - it reads a text in blocks. One longer than 125,000 bytes, with no empty
   line between its bytes 100,000 and 125,000, is cut there, and a name that
@@ -57,9 +56,10 @@ with gitleaks 8.30.1:
 - it matches every path in the list against the number a file is handed over
   under, never against the file's own path (see below).
 
-The line break has two costs. A line number in a refusal counts it, so it is
-one higher than in the file. And a rule anchored at the very start of a text
-matches nothing.
+The line break has two costs. For a text jalon decoded, a line number in a
+refusal is one higher than in the file; for a file handed on unopened it is
+the file's own. And a rule anchored at the very start of a text no longer
+matches there.
 
 The check does not catch:
 
@@ -83,13 +83,11 @@ The check does not catch:
 - a rule written for one shape of a commit's own text: a commit and a tag
   are read as git stores them, where the author's line opens with `author `;
   and a commit whose text is not UTF-8 is refused, clean or not;
-- a later push from a repository whose Git LFS content is already public: a
-  push that introduces or changes an LFS pointer is refused, and the next one
-  that changes none is not;
-- a Git LFS pointer in a form jalon does not know. It knows one by the line
-  Git LFS writes at its top, today's and the one before its first release.
-  Git LFS still reads other forms, an older address or a pointer after an
-  empty line, and those pass;
+- content stored with Git LFS: it goes to another server, past this check,
+  and jalon does not look for its pointers. A pointer is one more text;
+- in a folder, a name or a link target that is not UTF-8: it reaches gitleaks
+  with `?` in place of each such byte. In a push, a path that is not UTF-8
+  is refused;
 - content the destination already holds, which a push does not send: the
   same file under a new name is not read again, though its new name is;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is

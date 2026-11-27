@@ -144,10 +144,10 @@ def test_an_allowance_in_the_list_itself_still_works(private_list):
 
 # What the commit and folder scans read.
 
-def git(repo, *args, env=None):
+def git(repo, *args, env=None, input=None):
     import os
     import subprocess
-    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+    done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, input=input,
                           env={**os.environ, **(env or {})})
     assert done.returncode == 0, done.stderr
     return done.stdout.strip()
@@ -271,33 +271,48 @@ def test_every_path_of_a_pushed_commit_is_read(private_list, alone):
     leak.check_commits(alone, ["HEAD", "--not", other])
 
 
+@needs_gitleaks
+def test_paths_are_read_from_the_top_wherever_the_scan_runs(private_list, alone, monkeypatch):
+    # git lists a tree from the folder it runs in, unless told to list it whole.
+    git(alone, "init", "-q", "-b", "main")
+    (alone / "notes").mkdir()
+    (alone / "other").mkdir()
+    committed(alone, "other/a.txt", "a clean line\n")
+    monkeypatch.chdir(alone / "other")
+    leak.check_commits(".", ["HEAD"])  # the control: clean paths, read from a folder of the checkout
+    committed(alone, "notes/Zorblatt.txt", "a clean line\n")
+    with pytest.raises(Refused, match="private-name"):
+        leak.check_commits(".", ["HEAD"])
+
+
+@needs_gitleaks
+@pytest.mark.parametrize("name, refused", [("plain", False), ("Zorblatt", True)])
+def test_the_name_of_a_folder_that_holds_nothing_is_read(private_list, alone, name, refused):
+    # git itself writes no such folder; a tool that writes trees can, and a push sends its name.
+    git(alone, "init", "-q", "-b", "main")
+    empty = git(alone, "mktree", input="")
+    tree = git(alone, "mktree", input=f"040000 tree {empty}\t{name}\n")
+    tip = git(alone, "commit-tree", tree, "-m", "a folder that holds nothing")
+    if refused:
+        with pytest.raises(Refused, match="private-name"):
+            leak.check_commits(alone, [tip])
+    else:
+        leak.check_commits(alone, [tip])
+
+
 POINTER = "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize 12\n"
 
 
 @needs_gitleaks
-@pytest.mark.parametrize("removal", ["deleted", "replaced by its content"])
-def test_a_new_or_changed_lfs_pointer_is_refused_and_its_removal_passes(private_list, alone, removal):
-    # A pointer's content goes to another server. Removing one sends nothing there.
+def test_a_git_lfs_pointer_is_one_more_text(private_list, alone):
+    # A stated limit: what a pointer stands for goes to another server, and jalon does not look for pointers.
     git(alone, "init", "-q", "-b", "main")
     base = committed(alone, "a.txt", "a clean line\n")
     added = committed(alone, "data.csv", POINTER.format("a" * 64))
-    with pytest.raises(Refused, match="'data.csv' is a Git LFS pointer"):
-        leak.check_commits(alone, [added, "--not", base])
-    changed = committed(alone, "data.csv", POINTER.format("b" * 64))
-    with pytest.raises(Refused, match="Git LFS pointer"):
-        leak.check_commits(alone, [changed, "--not", added])
-    docs = committed(alone, "README.md", "a clean line\n")
-    leak.check_commits(alone, [docs, "--not", changed])  # a stated limit: that pointer is already public
-    if removal == "deleted":
-        git(alone, "rm", "-q", "data.csv")
-        git(alone, "commit", "-q", "-m", "no dataset")
-        gone = git(alone, "rev-parse", "HEAD")
-    else:
-        gone = committed(alone, "data.csv", "a,b\n1,2\n")
-    leak.check_commits(alone, [gone, "--not", docs])
-    old = committed(alone, "old.csv", POINTER.format("c" * 64).replace("git-lfs.github.com", "hawser.github.com"))
-    with pytest.raises(Refused, match="'old.csv' is a Git LFS pointer"):
-        leak.check_commits(alone, [old, "--not", gone])  # the format Git LFS still reads from before its release
+    leak.check_commits(alone, [added, "--not", base])
+    named = committed(alone, "more.csv", POINTER.format("b" * 64) + "x-note Zorblatt\n")
+    with pytest.raises(Refused, match="private-name"):
+        leak.check_commits(alone, [named, "--not", added])
 
 
 # What both scans read: every text, whatever it is called and however it is encoded.
