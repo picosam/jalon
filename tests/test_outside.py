@@ -54,29 +54,47 @@ def remote_tip(repo, ref="refs/heads/main"):
 # park: the three main paths.
 
 def test_park_file_files_one_issue(outside, body):
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
     answer(outside, "repo-view", "PRIVATE\n")
     answer(outside, "issue-create", "https://example.org/8\n")
     done = run("jalon", "park", "file", "--title", "A title", "--body-file", body, "--depth", "quick", "--decision")
     assert (done.returncode, done.stdout) == (0, "https://example.org/8\n")
-    assert calls(outside, "issue create") == ["issue create --title A title --body-file - --label decision --label quick"]
+    assert calls(outside, "issue create") == ["issue create --title A title --body-file - --label decision --label quick "
+                                              "--repo https://github.com/owner/name"]
     assert (outside / "stdin").read_text() == body.read_text()
-    # The visibility read and the filing, and no lookup of open issues.
-    assert [line.split(" --")[0] for line in calls(outside, "")] == ["repo view", "issue create"]
+    # The checkout's repository, the visibility read and the filing, and no lookup of open issues.
+    assert [line.split(" --")[0] for line in calls(outside, "")] == [
+        "repo view", "repo view https://github.com/owner/name", "issue create"]
 
 
-def test_park_file_takes_no_deposit(outside, body, alone):
-    # A kept deposit is filed, then removed with park reject.
+def test_park_file_files_into_the_checkouts_repository_on_its_own_host(outside, body):
+    # The checkout's remote is on another host than github.com, and GH_REPO
+    # names another repository: the checkout's is read with GH_REPO left out,
+    # and the visibility read and the filing both name it, host included.
+    answer(outside, "repo-url", "https://git.example.org/owner/name\n")
+    answer(outside, "repo-view", "PRIVATE\n")
+    answer(outside, "issue-create", "https://git.example.org/owner/name/issues/8\n")
+    done = run("jalon", "park", "file", "--title", "A title", "--body-file", body, "--depth", "quick",
+               env={"GH_REPO": "owner/other"})
+    assert (done.returncode, done.stdout) == (0, "https://git.example.org/owner/name/issues/8\n"), done.stderr
+    assert [line.removesuffix(" GH_REPO=owner/other") for line in calls(outside, "")] == [
+        "repo view --json url --jq .url",
+        "repo view https://git.example.org/owner/name --json visibility --jq .visibility",
+        "issue create --title A title --body-file - --label quick --repo https://git.example.org/owner/name"]
+    assert "GH_REPO" not in calls(outside, "")[0]
+
+
+def test_park_takes_no_deposit(outside, body, alone):
+    # A deposit is filed as any issue is, then deleted with rm: park has no
+    # option and no command for it.
     (alone / "deposit.md").write_text("a proposal")
     done = run("jalon", "park", "file", "--title", "A title", "--body-file", body, "--depth", "quick",
                "--deposit", "deposit.md")
     assert done.returncode == 2 and (alone / "deposit.md").exists() and calls(outside, "") == []
-
-
-def test_park_reject_drops_the_deposit(outside, alone):
-    (alone / "deposit.md").write_text("a proposal")
     done = run("jalon", "park", "reject", "deposit.md", "--reason", "covered by #3")
-    assert (done.returncode, done.stdout) == (0, "rejected deposit.md: covered by #3\n")
-    assert not (alone / "deposit.md").exists()
+    assert done.returncode == 2 and (alone / "deposit.md").exists()
+    listed = run("jalon", "park", "--help").stdout
+    assert "file" in listed and "close" in listed and "reject" not in listed
 
 
 def decision(outside, alone, state="CLOSED"):
@@ -84,7 +102,7 @@ def decision(outside, alone, state="CLOSED"):
     checkout of a private repository."""
     run("git", "init", "-q", "-b", "main", alone)
     answer(outside, "repo-view", "PRIVATE\n")
-    answer(outside, "repo-name", "owner/name\n")
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
     closed = {"stateReason": "COMPLETED", "closedAt": "2026-01-03T09:00:00Z"} if state == "CLOSED" else \
         {"stateReason": None, "closedAt": None}
     answer(outside, "issue-view", json.dumps({"number": 7, "title": "Which option?", "state": state,
@@ -126,13 +144,57 @@ def test_park_close_names_no_other_repository(outside, alone):
     decision(outside, alone)
     done = run("jalon", "park", "close", "7", "--record-file", "record.md", "--name", "which-option",
                "--repo", "owner/other")
-    assert done.returncode == 1 and "this checkout's repository is owner/name" in done.stderr
+    assert done.returncode == 1 and "this checkout's repository is https://github.com/owner/name" in done.stderr
     assert calls(outside, "issue view") == [] and not (alone / "decisions").exists()
     done = run("jalon", "park", "close", "7", "--record-file", "record.md", "--name", "which-option",
                env={"GH_REPO": "owner/other"})
     assert done.returncode == 0, done.stderr
     assert calls(outside, "") and not [line for line in calls(outside, "") if "GH_REPO=" in line]
-    assert calls(outside, "issue view")[0].startswith("issue view 7 --repo owner/name ")
+    assert calls(outside, "issue view")[0].startswith("issue view 7 --repo https://github.com/owner/name ")
+
+
+def files_under(folder):
+    """Every file of the checkout, and git's index among them."""
+    return {path: path.read_bytes() for path in folder.rglob("*")
+            if path.is_file() and (".git" not in path.parts or path.name == "index")}
+
+
+@pytest.mark.parametrize("case", ["committed", "modified", "staged", "untracked", "row names ../keep.md",
+                                  "row names 8-other.md"])
+def test_park_close_leaves_the_replaced_records_deletion_to_git(outside, alone, case):
+    # git removes the record of decision 7, found by its number, or refuses
+    # and nothing changes. What the index row names is never a path to delete.
+    decision(outside, alone)
+    assert run("jalon", "park", "close", "7", "--record-file", "record.md", "--name", "which-option").returncode == 0
+    (alone / "keep.md").write_text("kept\n")
+    (alone / "decisions/8-other.md").write_text("kept\n")
+    old, index = alone / "decisions/7-which-option.md", alone / "decisions/index.jsonl"
+    if case.startswith("row names"):
+        index.write_text(index.read_text().replace('"7-which-option.md"', json.dumps(case.split()[-1])))
+    run("git", "add", "keep.md", "decisions/8-other.md", "decisions/index.jsonl", cwd=alone)
+    if case != "untracked":
+        run("git", "add", "decisions/7-which-option.md", cwd=alone)
+    assert run("git", "commit", "-q", "-m", "records", cwd=alone).returncode == 0
+    if case in ("modified", "staged"):
+        old.write_text(old.read_text() + "An amendment.\n")
+    if case == "staged":
+        run("git", "add", "decisions/7-which-option.md", cwd=alone)
+    answer(outside, "issue-view", json.dumps({"number": 9, "title": "Which option, again?", "state": "CLOSED",
+                                              "stateReason": "COMPLETED", "closedAt": "2026-01-04T09:00:00Z",
+                                              "labels": [{"name": "decision"}],
+                                              "url": "https://github.com/owner/name/issues/9"}))
+    before = files_under(alone)
+    done = run("jalon", "park", "close", "9", "--record-file", "record.md", "--name", "which-option-again",
+               "--replaces", "7")
+    if case in ("modified", "staged", "untracked"):
+        assert done.returncode == 1 and "git did not remove the record of #7, so nothing changes" in done.stderr
+        assert files_under(alone) == before
+    else:
+        assert done.returncode == 0, done.stderr
+        assert not old.exists() and (alone / "decisions/9-which-option-again.md").exists()
+        assert run("git", "status", "--short", "decisions/7-which-option.md", cwd=alone).stdout[:2] == "D "
+        for kept in ("keep.md", "decisions/8-other.md"):
+            assert (alone / kept).read_bytes() == b"kept\n"
 
 
 # The push path: its main path, then the boundary.
@@ -218,6 +280,24 @@ def test_only_the_commits_being_pushed_are_scanned(repo, outside, private_list):
     assert run("jalon", "push", "origin", "main:refs/heads/other", cwd=repo).returncode == 0
     run("git", "tag", "v1", cwd=repo)
     assert run("jalon", "push", "origin", "v1", cwd=repo).returncode == 0
+
+
+@pytest.mark.parametrize("listed", [False, True])
+def test_the_hook_runs_the_jalon_that_wrote_it(repo, private_list, listed):
+    # git runs the hook at the top of the repository being pushed. A jalon.py
+    # there would stand in for the check in a Python that looks for modules in
+    # the folder it runs in, or in the folders PYTHONPATH names.
+    commit(repo, "jalon.py", 'open("../stood-in", "w").close()\n', "a module of the same name")
+    tip = commit(repo, "second.txt", f"written by {NAME if listed else 'someone'}\n", "the second commit")
+    before = remote_tip(repo)
+    done = run("jalon", "push", "origin", "main", cwd=repo, env={"PYTHONPATH": "."})
+    if listed:
+        assert done.returncode == 1 and "private-name" in done.stderr
+        assert remote_tip(repo) == before
+    else:
+        assert done.returncode == 0, done.stderr
+        assert remote_tip(repo) == [tip]
+    assert not (repo.parent / "stood-in").exists()
 
 
 def test_a_clean_forced_update_with_its_option_first_goes_through(repo, private_list):
@@ -473,6 +553,7 @@ def test_a_name_git_would_quote_is_read_as_it_is_spelled(repo, private_list, tmp
 # Texts and folders.
 
 def test_an_issue_body_with_a_listed_name_is_not_filed_on_a_public_repository(outside, body, private_list):
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
     answer(outside, "repo-view", "PUBLIC\n")
     body.write_text(body.read_text().replace("Because the source says so.", f"Because {NAME} said so."))
     done = run("jalon", "park", "file", "--title", "A title", "--body-file", body, "--depth", "quick")
@@ -481,6 +562,7 @@ def test_an_issue_body_with_a_listed_name_is_not_filed_on_a_public_repository(ou
 
 
 def test_an_issue_title_with_a_listed_name_is_not_filed_either(outside, body, private_list):
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
     answer(outside, "repo-view", "PUBLIC\n")
     done = run("jalon", "park", "file", "--title", f"Ask {NAME}", "--body-file", body, "--depth", "quick")
     assert done.returncode != 0
@@ -488,6 +570,7 @@ def test_an_issue_title_with_a_listed_name_is_not_filed_either(outside, body, pr
 
 
 def test_without_a_list_no_issue_is_filed_on_a_public_repository(outside, body):
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
     answer(outside, "repo-view", "PUBLIC\n")
     done = run("jalon", "park", "file", "--title", "A title", "--body-file", body, "--depth", "quick")
     assert done.returncode != 0 and "no private list at" in done.stderr

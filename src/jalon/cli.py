@@ -14,7 +14,7 @@ def _parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="jalon", description=__import__("jalon").__doc__)
     commands = top.add_subparsers(dest="command", required=True)
 
-    parked = commands.add_parser("park", help="file a scoped issue, reject a deposit, record a closed decision")
+    parked = commands.add_parser("park", help="file a scoped issue, record a closed decision")
     verbs = parked.add_subparsers(dest="verb", required=True)
     file = verbs.add_parser("file", help="file one issue that passes the nine-section bar")
     file.add_argument("--title", required=True)
@@ -26,15 +26,12 @@ def _parser() -> argparse.ArgumentParser:
     file.add_argument("--blocked-by")
     file.add_argument("--parent")
     file.add_argument("--repo")
-    reject = verbs.add_parser("reject", help="drop an inbox deposit, with the reason")
-    reject.add_argument("deposit", type=Path)
-    reject.add_argument("--reason", required=True)
     close = verbs.add_parser("close", help="record a decision GitHub shows closed as completed, in decisions/")
     close.add_argument("number", type=int)
     close.add_argument("--record-file", required=True, type=Path)
     close.add_argument("--name", required=True, help="the record's short name: decisions/<number>-<name>.md")
     close.add_argument("--replaces", type=int, help="an earlier decision this one replaces")
-    close.add_argument("--repo", help="OWNER/NAME the issue was closed in; it must be this checkout's")
+    close.add_argument("--repo", help="the repository it was closed in, as `gh repo view --json url` prints it")
 
     leaked = commands.add_parser("leak", help="check that nothing private goes to a public repository")
     kinds = leaked.add_subparsers(dest="verb", required=True)
@@ -64,8 +61,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(park.file(args.title, args.body_file, args.depth, decision=args.decision, parked=args.parked,
                                 assignee=args.assignee, blocked_by=args.blocked_by, parent=args.parent,
                                 repo=args.repo))
-            case "park", "reject":
-                print(park.reject(args.deposit, args.reason))
             case "park", "close":
                 print(os.path.relpath(park.close(args.number, args.record_file, args.name, replaces=args.replaces,
                                                  repo=args.repo)))

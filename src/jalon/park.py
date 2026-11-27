@@ -1,4 +1,4 @@
-"""park: file a scoped issue, reject a deposit, record a closed decision.
+"""park: file a scoped issue, record a closed decision.
 
 `gh` does the filing; GitHub holds the closing. What is ours is the bar an issue passes
 before it is filed, and the record a closed decision leaves in `decisions/`.
@@ -104,13 +104,16 @@ def file(title: str, body_file: Path, depth: str, *, decision: bool = False, par
          assignee: str | None = None, blocked_by: str | None = None, parent: str | None = None,
          repo: str | None = None) -> str:
     """File one issue that passes the bar; returns its URL. The body is read
-    once: the text checked is the text gh receives, on its standard input."""
+    once: the text checked is the text gh receives, on its standard input.
+    Without `repo`, the repository is this checkout's, host included, and both
+    the visibility read and the filing name it."""
     body = Path(body_file).read_text(encoding="utf-8")
     missing = gaps(body)
     if not title.strip():
         missing.insert(0, "the title is empty")
     if missing:
         raise Refused("the issue is under the bar:\n- " + "\n- ".join(missing))
+    repo = repo or _repository()
     if leak.is_public(repo):
         leak.check_text(title + "\n\n" + body)
     command = ["issue", "create", "--title", title, "--body-file", "-"]
@@ -120,17 +123,6 @@ def file(title: str, body_file: Path, depth: str, *, decision: bool = False, par
         if value:
             command += [flag, value]
     return _gh(*command, input=body).strip()
-
-
-def reject(deposit: Path, reason: str) -> str:
-    """Drop an inbox deposit; the reason is said, not stored."""
-    deposit = Path(deposit)
-    if not deposit.is_file():
-        raise Refused(f"no deposit at {deposit}")
-    if not reason.strip():
-        raise Refused("a rejection carries its reason")
-    deposit.unlink()
-    return f"rejected {deposit.name}: {reason.strip()}"
 
 
 def _items(lines: list[tuple[str, bool]]) -> list[str]:
@@ -165,8 +157,9 @@ def _here() -> dict[str, str]:
 
 
 def _repository() -> str:
-    """This checkout's repository, OWNER/NAME, as gh resolves it here."""
-    return _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner", env=_here()).strip()
+    """This checkout's repository as gh resolves it here: its address, which
+    keeps the host, and which gh takes wherever it takes a repository."""
+    return _gh("repo", "view", "--json", "url", "--jq", ".url", env=_here()).strip()
 
 
 def _view(number: int, repository: str) -> dict:
@@ -213,12 +206,6 @@ def _locked(root: Path):
         os.close(folder)
 
 
-def _held_by_git(path: Path) -> bytes | None:
-    """The bytes git holds for this file at HEAD, or None."""
-    run = subprocess.run(["git", "-C", str(path.parent), "show", f"HEAD:./{path.name}"], capture_output=True)
-    return run.stdout if run.returncode == 0 else None
-
-
 def close(number: int, record_file: Path, name: str, *, replaces: int | None = None,
           repo: str | None = None) -> Path:
     """Record a decision GitHub shows closed as completed:
@@ -229,18 +216,20 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
     checkout's repository, and the folder must hold that repository's
     decisions only; `repo`, the one the issue was closed in, must be it.
 
-    A decision it replaces must be active and committed as it stands, since
-    its file goes; its bytes are compared once, before anything is written, so
-    nobody edits `decisions/` while a close runs. A record or an index line
-    already there for this decision refuses, named, and nothing changes: a run
-    that stopped part-way is reconciled by a person, with git."""
+    A decision it replaces loses its record, and git removes it: `git rm`
+    on `decisions/<replaces>-*.md`, before anything is written. The path comes
+    from the decision's number, never from the index, and git refuses a record
+    that is modified, staged or not tracked; the removal is left staged. A
+    record or an index line already there for this decision refuses, named,
+    and nothing changes: a run that stopped part-way is reconciled by a
+    person, with git."""
     root = _root()
     repository = _repository()
     if repo is not None and repo != repository:
         raise Refused(f"#{number} was closed in {repo}, but this checkout's repository is {repository}: "
                       "record it in that repository's checkout")
     issue = _view(number, repository)
-    if issue["number"] != number or not issue["url"].endswith(f"/{repository}/issues/{number}"):
+    if issue["number"] != number or issue["url"] != f"{repository}/issues/{number}":
         raise Refused(f"#{number} came back as {issue['url']}, not an issue of {repository}")
     if "decision" not in [label["name"] for label in issue["labels"]]:
         raise Refused(f"#{number} does not carry the label decision")
@@ -254,7 +243,7 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
     root.mkdir(parents=True, exist_ok=True)
     with _locked(root):
         lines = _index(root)
-        if strangers := [line["link"] for line in lines if f"/{repository}/issues/" not in line["link"]]:
+        if strangers := [line["link"] for line in lines if not line["link"].startswith(f"{repository}/issues/")]:
             raise Refused(f"{root} records decisions of another repository than {repository}: {strangers[0]}")
         found = sorted(path.name for glob in (f"{number}-*.md", f".{number}-*.md.part") for path in root.glob(glob))
         found += ["its line in index.jsonl"] if any(line["number"] == number for line in lines) else []
@@ -281,18 +270,14 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
                 raise Refused(f"#{replaces} is not in {root / 'index.jsonl'}, so nothing can replace it")
             if older["replaced_by"] is not None:
                 raise Refused(f"#{replaces} was already replaced by #{older['replaced_by']}")
-            path = root / older["file"]
-            if not path.is_file():
-                raise Refused(f"{path} is missing: decision {replaces} is not active")
-            if path.read_bytes() != _held_by_git(path):
-                raise Refused(f"{path} is not committed as it stands: commit it first, or its words are lost "
-                              "when it goes")
+            gone = subprocess.run(["git", "-C", str(root.parent), "rm", "--", f":(glob)decisions/{replaces}-*.md"],
+                                  capture_output=True, text=True)
+            if gone.returncode != 0:
+                raise Refused(f"git did not remove the record of #{replaces}, so nothing changes: {gone.stderr.strip()}")
         _write(target, text)
         if older:
             older["replaced_by"] = number
         lines.append({"number": number, "title": issue["title"], "closed": closed, "link": issue["url"],
                       "file": target.name, "replaced_by": None})
         _write(root / "index.jsonl", "".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines))
-        if older:
-            (root / older["file"]).unlink()
     return target
