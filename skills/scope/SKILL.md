@@ -167,10 +167,9 @@ recorded, then the words in double quotes) and `## Would overturn`, and run:
     jalon park close <n> --repo "$repo" --record-file <file> --name <short-name>
 
 Add `--replaces <m>` when it replaces an earlier decision, whose record must
-be committed first: git removes it, `git rm` on `decisions/<m>-*.md`, shows
-what it removed, and refuses a record it does not track or that differs from
-the last commit. Every file of that name goes. The removal is left staged,
-for the commit that adds the new record. The command refuses a `--repo` that is not this
+be committed first: git removes it, by `git rm` on `decisions/<m>-*.md`, and
+shows what it removed. When git refuses, nothing changes: read what it says.
+The removal is left staged, for the commit that adds the new record. The command refuses a `--repo` that is not this
 checkout's, reads the issue from that repository and refuses one GitHub does
 not show closed as completed; it changes nothing on GitHub. It writes
 `decisions/<n>-<short-name>.md` at the top of the checkout, dated with

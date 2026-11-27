@@ -220,7 +220,7 @@ def close(number: int, record_file: Path, name: str, *, replaces: int | None = N
     on `decisions/<replaces>-*.md`, before anything is written, and git's own
     lines say what went. The path comes from the decision's number, never from
     the index: every file of that name is taken for the record. What git
-    refuses is the check, and the README says what it does not refuse; the
+    refuses is the only check, and when it refuses nothing changes; the
     removal is left staged. A record or an index line already there for this
     decision refuses, named, and nothing changes: a run that stopped part-way
     is reconciled by a person, with git."""

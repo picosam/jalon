@@ -12,7 +12,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 |---|---|
 | `skills/scope/` | The `scope` skill: narrows a conversation to one issue an agent can pick up, with nine sections, a checkable "Done when" and a review depth. |
 | `jalon park file` | Files one issue, after checking the nine sections. The check catches a forgotten section or "Done when" line; it is not a guard against hidden or oddly formatted text, and a person reads every issue before it is filed. Without `--repo` it files into the checkout's repository, host included, read with `GH_REPO` left out. |
-| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed: git refuses a record it does not track, or one that differs from the last commit, and the removal is left staged. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
+| `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; when git refuses, nothing changes, and a removal is left staged. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
 | `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list: file contents, file names and link targets, commit messages, authors and committers, and what a merge's resolution adds. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 
@@ -47,22 +47,12 @@ The check does not catch:
   jalon that wrote it, whatever the repository being pushed or the
   environment holds.
 
-`park close --replaces` hands the deletion to `git rm`, and what git does is
-what happens:
-
-- every file named `decisions/<number>-*.md` is taken for the replaced
-  decision's record and removed, so nothing else is named that way;
-- a record whose file is already gone from the folder is removed from the
-  index without a word, an edit staged for it included: git keeps that edit
-  only as an object nothing points to;
-- a record marked `git update-index --assume-unchanged` is removed as git sees
-  it, an uncommitted edit included;
-- `decisions/` is a plain folder of the checkout: if it is a link, a record
-  is written where the link leads, and a replacement is refused, since git
-  finds no record of the checkout behind it.
-
-What is removed was committed, and the removal is only staged: `git restore
---staged --worktree decisions` brings it back until it is committed.
+`park close --replaces` checks nothing about the record it removes: it runs
+`git rm` on `decisions/<number>-*.md` at the top of the checkout and shows
+git's output. What git removes or refuses is git's to decide, in every state
+of the checkout, and jalon looks at none of them: a file of that name that
+is not the record, an edit that is staged, a file already gone from the
+folder, a flag set on the index, a `decisions/` that is a link.
 
 A deposit in a project's inbox folder is deleted with `rm`, once it is filed
 or set aside: jalon has no command for it.
