@@ -423,6 +423,25 @@ def test_a_branch_name_with_another_space_or_line_break_is_read_whole(repo, priv
         assert remote_tip(repo, f"refs/heads/{name}") == [tip]
 
 
+def test_a_source_written_with_spaces_is_read_from_the_right(repo, private_list):
+    # git hands the hook the source as it was written, and a revision may hold spaces.
+    tip = commit(repo, "second.txt", "a clean line\n", "the second commit")
+    done = run("jalon", "push", "origin", "HEAD^{/the second commit}:refs/heads/other", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert remote_tip(repo, "refs/heads/other") == [tip]
+
+
+def test_a_ref_at_the_destination_passes_no_commit_off_as_held(repo, private_list, tmp_path):
+    # What the destination lists is read at line feeds only: a ref there whose name holds U+2028 and then
+    # a commit's id is one line, not a second one that names that commit as held.
+    tip = commit(repo, "second.txt", f"written by {NAME}\n", "the second commit")
+    before = remote_tip(repo)
+    assert run("git", "--git-dir", tmp_path / "remote.git", "branch", f"a {tip}", "main").returncode == 0
+    done = run("jalon", "push", "origin", "main", cwd=repo)
+    assert done.returncode == 1 and "private-name" in done.stderr
+    assert remote_tip(repo) == before
+
+
 def test_a_name_on_a_ref_stops_its_push_even_on_a_commit_already_there(repo, private_list):
     # A new branch's name is published, whatever it points at.
     done = run("jalon", "push", "origin", f"main:refs/heads/for-{NAME}", cwd=repo)

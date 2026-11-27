@@ -212,7 +212,7 @@ def pre_push(remote: str, url: str, lines: list[str], repo: Path | str = ".") ->
         raise Refused(f"no private list at {list_path()}: nothing goes to a public repository from this machine")
     updates = []
     for line in lines:
-        fields = line.split(" ") if line else []  # git's separators: a ref name may hold other spaces
+        fields = line.rsplit(" ", 3) if line else []  # git's own separator, from the right: a source may hold spaces
         if not fields:
             continue
         if len(fields) != 4:
