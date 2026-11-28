@@ -1102,3 +1102,120 @@ def test_a_detached_head_still_warns_about_a_declaration_it_cannot_read(declared
     run("git", "switch", "-q", "--detach", cwd=declared)
     done = attempt(declared, "src.txt", "Any subject at all")
     assert done.returncode == 0 and done.stderr.count("jalon: warning:") == 2
+
+
+# start: the issue's branch, checked out here.
+
+GRAPHQL = "api graphql --hostname github.com -f query="
+
+
+def issue(outside, state="OPEN", body=None, title="Start the work here now", edited="2026-11-28T14:08:01Z",
+          linked=(), closing=()):
+    """Issue 15 of owner/name, whose default branch is main; `closing` names the head branches of the open pull
+    requests that close it."""
+    from conftest import BODY
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
+    nodes = [{"ref": {"name": branch}} for branch in linked]
+    answer(outside, "api-graphql", json.dumps({"data": {"repository": {
+        "defaultBranchRef": {"name": "main"},
+        "issue": {"title": title, "body": BODY if body is None else body, "state": state, "lastEditedAt": edited,
+                  "createdAt": "2026-11-28T14:00:00Z", "linkedBranches": {"nodes": nodes},
+                  "closedByPullRequestsReferences": {"nodes": [
+                      {"state": "OPEN", "headRefName": branch, "isCrossRepository": False} for branch in closing]}}}}}))
+
+
+@pytest.mark.parametrize("state, body, said", [
+    ("CLOSED", None, "is closed, not open"),
+    ("OPEN", "## Why\n\nBecause.\n", "has no ## Done when section"),
+    ("OPEN", "## Done when\n\nWhen it works.\n\n```\n- not a list line\n```\n", '"Done when" holds no list line'),
+])
+def test_start_refuses_an_issue_with_no_criteria_to_start_from(repo, outside, state, body, said):
+    issue(outside, state=state, body=body)
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 1 and said in done.stderr
+    assert calls(outside, "issue develop") == [] and calls(outside, "issue comment") == []
+
+
+def test_start_reads_the_issue_once_from_this_checkouts_repository(repo, outside, private_list):
+    issue(outside)
+    done = run("jalon", "start", "15", cwd=repo, env={"GH_REPO": "someone/else"})
+    assert done.returncode == 0, done.stderr
+    read = calls(outside, GRAPHQL)
+    assert len(read) == 1 and read[0].endswith("-f owner=owner -f name=name -F number=15")
+    assert "lastEditedAt createdAt linkedBranches" in read[0] and "defaultBranchRef" in read[0]
+    ours = calls(outside, "repo view --json url") + read + calls(outside, "issue ")
+    assert len(ours) == 4 and not [line for line in ours if "GH_REPO=" in line]
+
+
+@pytest.mark.parametrize("linked, extra, branch", [
+    ((), [], "15-start-the-work"),
+    ((), ["--name", "start"], "15-start"),
+    (("15-made-by-hand",), ["--name", "ignored"], "15-made-by-hand"),
+])
+def test_start_makes_or_reuses_the_linked_branch_and_checks_it_out(repo, outside, private_list, linked, extra, branch):
+    issue(outside, title="Start the work: here, now", linked=linked)
+    done = run("jalon", "start", "15", *extra, cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == f"{branch}\n"
+    assert calls(outside, "issue develop") == [
+        f"issue develop 15 --repo https://github.com/owner/name --base main --name {branch} --checkout"]
+
+
+def test_start_reuses_a_branch_github_lists_and_an_open_pull_request_names_once(repo, outside, private_list):
+    issue(outside, linked=("15-start",), closing=("15-start",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, "issue develop") == [
+        "issue develop 15 --repo https://github.com/owner/name --base main --name 15-start --checkout"]
+
+
+def test_start_checks_out_with_git_the_branch_only_an_open_pull_request_names(repo, outside, private_list):
+    # GitHub stops listing a linked branch once a pull request from it is connected to the issue, and
+    # gh issue develop then tries to create the branch rather than reuse it.
+    assert run("git", "push", "-q", "origin", "main:refs/heads/15-start", cwd=repo).returncode == 0
+    issue(outside, closing=("15-start",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, "issue develop") == []
+    assert run("git", "branch", "--show-current", cwd=repo).stdout == "15-start\n"
+    assert calls(outside, "issue comment") == ["issue comment 15 --repo https://github.com/owner/name --body-file -"]
+
+
+def test_start_refuses_an_issue_with_more_than_one_linked_branch(repo, outside):
+    issue(outside, linked=("15-one", "15-two"))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 1 and "2 linked branches: 15-one, 15-two" in done.stderr
+    assert calls(outside, "issue develop") == [] and calls(outside, "issue comment") == []
+
+
+@pytest.mark.parametrize("edited, read_as", [
+    ("2026-11-28T14:08:01Z", "as this issue's body was last edited at 2026-11-28T14:08:01Z"),
+    (None, "as this issue was filed at 2026-11-28T14:00:00Z; its body was never edited"),
+])
+def test_start_records_on_the_issue_when_the_criteria_were_read(repo, outside, private_list, edited, read_as):
+    issue(outside, edited=edited, linked=("15-start",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, "issue comment") == ["issue comment 15 --repo https://github.com/owner/name --body-file -"]
+    assert (outside / "stdin").read_text() == (
+        f"Started by `jalon start` on branch `15-start`. The criteria were read {read_as}.")
+
+
+def test_start_posts_no_comment_the_list_refuses(repo, outside, private_list):
+    issue(outside, linked=(f"15-{NAME}",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 1 and "private-name" in done.stderr
+    assert calls(outside, "issue comment") == []
+
+
+def test_start_names_each_hook_this_clone_lacks(repo, outside, private_list):
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\n")
+    hook.chmod(0o755)
+    (repo / ".git" / "hooks" / "commit-msg").write_text("#!/bin/sh\n")  # present, not executable
+    issue(outside)
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    named = [line for line in done.stderr.splitlines() if line.startswith("jalon: the ")]
+    assert named == ["jalon: the pre-commit hook is missing or not executable at .git/hooks/pre-commit",
+                     "jalon: the commit-msg hook is missing or not executable at .git/hooks/commit-msg"]

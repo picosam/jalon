@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import commit, leak, park, status
+from . import commit, leak, park, start, status
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +50,10 @@ def _parser() -> argparse.ArgumentParser:
                      ).add_argument("file", type=Path, help="the commit message file git hands the hook")
     hooks.add_parser("branch", help="git's pre-commit hook: on the default branch, only the declared data folders")
 
+    started = commands.add_parser("start", help="check out an issue's linked branch here, making it if it has none")
+    started.add_argument("number", type=int, help="the issue")
+    started.add_argument("--name", help="the branch's name after `<number>-`, when the issue has no linked branch")
+
     posted = commands.add_parser("status", help="post jalon/tests or jalon/title on a pull request's head commit")
     posts = posted.add_subparsers(dest="verb", required=True)
     posts.add_parser("tests", help="run the tests the default branch declares, here, and post jalon/tests"
@@ -91,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
                 commit.message(args.file)
             case "commit", "branch":
                 commit.branch()
+            case "start", _:
+                print(start.start(args.number, args.name))
             case "status", "tests":
                 return status.tests(args.number)
             case "status", "title":
