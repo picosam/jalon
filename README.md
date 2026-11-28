@@ -15,7 +15,8 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 | `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; a removal is left staged, and if git refuses, jalon stops and writes no record. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
 | `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list. In a folder: every text file's content, every file name and link target. In commits: the objects a push of them would send, each read whole as git stores it, with no patch in between: each new file, every path of each commit, and each commit's or tag's own text. A file that is not text is named in the output as not read. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
-| `jalon status tests\|title` | Posts `jalon/tests` or `jalon/title` on a pull request's head commit: the tests the default branch declares in `jalon.toml`, run in this checkout, or the title against the private list. |
+| `jalon status tests\|title` | Posts `jalon/tests` or `jalon/title` on a pull request's head commit: the tests the default branch declares in `jalon.toml`, run in this checkout, or the title against the private list and the declared vocabulary. |
+| `jalon commit message\|branch` | git's `commit-msg` and `pre-commit` hooks: a commit's subject against the vocabulary `jalon.toml` declares, and a commit on the default branch against its data folders. |
 
 ## The private list
 
@@ -178,8 +179,11 @@ either when the checkout's `HEAD` is no longer that commit once the commands
 have run. The commands run with the rights of whoever runs it.
 
 `jalon status title` passes the pull request's title through the private list
-and posts `success` or `failure`. On a private repository it checks nothing
-yet and posts nothing.
+and, where the default branch's `jalon.toml` declares `[commits]`, checks it
+against that vocabulary as a commit's subject is checked (below), then posts
+`success` or `failure`. On a private repository it checks the vocabulary alone;
+where that repository's default branch declares no `[commits]`, it checks
+nothing yet and posts nothing.
 
 On a repository that is not private, each status's description passes the
 private list before it is sent; the visibility is read at that moment, not
@@ -190,6 +194,70 @@ A status belongs to a commit, not to a title. Measured on 2026-11-28 with
 was edited, and the commit's statuses and the pull request's checks still
 showed `jalon/title` as `success`. A title edited after the post is not
 checked until `jalon status title` runs again.
+
+## Checking commits
+
+A squash merge records the pull request's title as the commit's subject, so
+the title is the check that binds; the two hooks below warn earlier, in one
+clone. The rules are the `[commits]` table of `jalon.toml`:
+
+    [commits]
+    types = ["change", "fix"]      # replaces the default list wholly
+    scopes = ["leak", "park"]      # none when absent
+    retired = { plan = "design" }  # a name no longer used, and what to use
+    data = ["records/"]            # folders a commit on the default branch may touch
+
+With no `types`, the types are `change`, `fix`, `refactor`, `guard`, `test`,
+`document`, `design`, `record`, `deliver`, `maintain` and `revert`. A subject
+reads `<type>[(<scope>)][!]: <subject>`, with a declared type and, where a
+scope is written, a declared scope; git's own `Revert "…"` and `Reapply "…"`
+pass where `revert` is a type. An empty `[commits]` takes the default types,
+no scope and no data folder; a repository with no `[commits]` is not checked.
+
+`jalon commit message <file>` judges the subject of a commit message file: the
+first paragraph that `git stripspace --strip-comments` keeps, its lines joined
+by one space. `jalon commit branch`, while `HEAD` is the branch
+`refs/remotes/origin/HEAD` names, refuses a commit when a path it stages lies
+outside every declared data folder, a submodule included whatever its
+`ignore` setting; on any other branch, or with `HEAD`
+detached, it lets the commit land. Both read `jalon.toml` from the tree `HEAD`
+records, never from the working tree, the index or a replacement object, and
+fetch nothing. A data folder is written as git writes paths, with no leading
+`./`. A
+`[commits]` they cannot read, or a clone with no `refs/remotes/origin/HEAD`,
+gets one warning line and no check, so the commit that repairs it can land.
+
+git never clones a hook; each clone places them, as executable files in its
+hooks folder:
+
+    # .git/hooks/commit-msg
+    #!/bin/sh
+    exec jalon commit message "$1"
+
+    # .git/hooks/pre-commit
+    #!/bin/sh
+    exec jalon commit branch
+
+What the hooks are handed is git's, and these limits were measured with git
+2.54.0:
+
+- On `git commit --amend`, `pre-commit` sees only the paths changed since
+  `HEAD`, not the paths the amended commit keeps from the one it replaces.
+- A merge, revert or cherry-pick concluded after a conflict runs `pre-commit`
+  and is judged by its paths like any commit; a clean merge, revert or
+  cherry-pick runs no `pre-commit` and lands unjudged.
+- `commit-msg` is handed the message before git cleans it up, and jalon reads
+  it as `git stripspace --strip-comments` leaves it, whatever cleanup the
+  commit uses. So the subject jalon judges differed from the one git recorded
+  for a message given with `-m` whose first line is a comment line, `#` or
+  the character `core.commentChar` sets (git keeps that line under `-m`,
+  jalon drops it), and the same under `commit.cleanup = verbatim` or
+  `core.commentChar = auto`. Under `commit.cleanup = strip` with a declared
+  comment character, both dropped it. A verbose commit, measured once, was
+  judged as git recorded it.
+- A clone with no `refs/remotes/origin/HEAD` gets a warning and no check of
+  the default branch.
+- `git commit --no-verify` runs neither hook.
 
 ## Before a repository's first `park file`
 

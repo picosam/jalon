@@ -4,8 +4,9 @@ The tests are the commands listed under `[tests]` in `jalon.toml`, read as the
 repository's default branch holds it on GitHub, so a pull request cannot change
 the commands that judge it. They run in this checkout, which must be clean and
 at the pull request's head. The title is checked against the private list on a
-repository that is not private, and every description sent to such a
-repository passes that list first.
+repository that is not private, and against the vocabulary the default branch
+declares under `[commits]`; every description sent to a repository that is not
+private passes the private list first.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import sys
 import tomllib
 from urllib.parse import urlsplit
 
-from . import leak
+from . import commit, leak
 from .leak import Refused
 from .park import _gh, _here, _repository
 
@@ -57,6 +58,18 @@ def declared_tests(text: str) -> list[str]:
     return commands
 
 
+def _declaration(repo: str) -> str | None:
+    """`jalon.toml` as the default branch holds it on GitHub (no ref is asked), or None where it holds none."""
+    host, path = _api(repo)
+    try:
+        return _gh("api", f"{path}/contents/{DECLARATION}", "--hostname", host,
+                   "-H", "Accept: application/vnd.github.raw+json", env=_here())
+    except Refused as refusal:
+        if "(HTTP 404)" in str(refusal):
+            return None
+        raise
+
+
 def _post(repo: str, sha: str, context: str, state: str, description: str) -> None:
     """Visibility is read now, not when the command started: a run can take minutes."""
     if leak.is_public(repo):
@@ -78,9 +91,9 @@ def tests(number: int) -> int:
         raise Refused(f"this checkout is at {here[:7]}, not at pull request {number}'s head {head[:7]}")
     if _git("status", "--porcelain"):
         raise Refused("git status shows changes in this checkout: the tests would not run the head commit")
-    host, path = _api(repo)
-    commands = declared_tests(_gh("api", f"{path}/contents/{DECLARATION}", "--hostname", host,
-                                  "-H", "Accept: application/vnd.github.raw+json", env=_here()))
+    if (text := _declaration(repo)) is None:
+        raise Refused(f"the default branch holds no {DECLARATION}")
+    commands = declared_tests(text)
     top = leak._git(".", "rev-parse", "--show-toplevel").removesuffix("\n")  # a name may end in a space
     for place, command in enumerate(commands, 1):
         print(f"jalon: {place} of {len(commands)}: {command}", file=sys.stderr, flush=True)
@@ -97,18 +110,29 @@ def tests(number: int) -> int:
 
 
 def title(number: int) -> int:
-    """Check pull request `number`'s title against the private list and post `jalon/title`."""
+    """Check pull request `number`'s title and post `jalon/title`: against the private list on a repository that is
+    not private, and against the vocabulary the default branch's `jalon.toml` declares under `[commits]`."""
     repo = _repository()
-    if not leak.is_public(repo):
-        raise Refused("on a private repository jalon status title checks nothing yet: nothing is posted")
+    text = _declaration(repo)
+    vocabulary = None if text is None else commit.declared(text, "on the default branch")
+    public = leak.is_public(repo)
+    if not public and vocabulary is None:
+        raise Refused("on a private repository whose default branch declares no [commits], "
+                      "jalon status title checks nothing yet: nothing is posted")
     pull = _pull(repo, number)
-    try:
-        leak.check_text(pull["title"])
-    except Refused as refusal:
-        print(f"jalon: the title: {refusal}", file=sys.stderr)
+    checked = " and ".join(["the private list"] * public + ["the declared vocabulary"] * (vocabulary is not None))
+    if public:
+        try:
+            leak.check_text(pull["title"])
+        except Refused as refusal:
+            print(f"jalon: the title: {refusal}", file=sys.stderr)
+            _post(repo, pull["headRefOid"], "jalon/title", "failure",
+                  "The title does not pass the private list; posted by jalon status title")
+            return 1
+    if vocabulary is not None and (why := commit.judge(pull["title"], vocabulary)):
+        print(f"jalon: the title: {why}", file=sys.stderr)
         _post(repo, pull["headRefOid"], "jalon/title", "failure",
-              "The title does not pass the private list; posted by jalon status title")
+              f"The title does not read as {DECLARATION} [commits] allows; posted by jalon status title")
         return 1
-    _post(repo, pull["headRefOid"], "jalon/title", "success",
-          "The title passes the private list; posted by jalon status title")
+    _post(repo, pull["headRefOid"], "jalon/title", "success", f"The title passes {checked}; posted by jalon status title")
     return 0

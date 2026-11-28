@@ -8,3 +8,6 @@ commands = [
     'd=$(mktemp -d) && git clone --quiet "$PWD" "$d/jalon" && (cd "$d/jalon" && uv run --python 3.15 pytest)',
     'e=$(mktemp -d) && git archive HEAD | tar -x -C "$e" && uv run --python 3.15 jalon leak dir "$e"',
 ]
+
+[commits]
+# The default types, no scopes, no data folders: see the README, "Checking commits".
