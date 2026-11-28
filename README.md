@@ -183,6 +183,12 @@ yet and posts nothing.
 On a repository that is not private, each status's description passes the
 private list before it is sent.
 
+A status belongs to a commit, not to a title. Measured on 2026-11-28 with
+`gh` 2.106.0: on a pull request whose head carried `jalon/title`, the title
+was edited, and the commit's statuses and the pull request's checks still
+showed `jalon/title` as `success`. A title edited after the post is not
+checked until `jalon status title` runs again.
+
 ## Before a repository's first `park file`
 
 The issues it files carry labels the repository must hold: `decision`,
