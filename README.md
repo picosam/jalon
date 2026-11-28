@@ -149,6 +149,14 @@ it leads.
 A deposit in a project's inbox folder is deleted with `rm`, once it is filed
 or set aside: jalon has no command for it.
 
+## What the merge gate enforces
+
+The merge gate is three required statuses, `jalon/tests`, `jalon/title` and
+`jalon/review`: GitHub requires them on a pull request's head commit, a new
+head carries none until they are posted on it, and where the branch rule
+accepts them from any app, as this repository's does, GitHub does not check
+who posted them.
+
 ## Before a repository's first `park file`
 
 The issues it files carry labels the repository must hold: `decision`,
