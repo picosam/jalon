@@ -20,7 +20,9 @@ from .park import LIST_ITEM, _gh, _here, _repository, _sections
 HOOKS = ("pre-push", "pre-commit", "commit-msg")
 QUERY = ("query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {"
          " defaultBranchRef { name } issue(number: $number) { title body state lastEditedAt createdAt"
-         " linkedBranches(first: 100) { nodes { ref { name } } } } } }")
+         " linkedBranches(first: 100) { nodes { ref { name } } }"
+         " closedByPullRequestsReferences(first: 100, includeClosedPrs: false) {"
+         " nodes { state headRefName isCrossRepository } } } } }")
 
 
 def _read(repo: str, number: int) -> tuple[dict, str]:
@@ -62,7 +64,11 @@ def start(number: int, name: str | None = None) -> str:
         raise Refused(f"issue {number} is {issue['state'].lower()}, not open")
     if why := _criteria(issue["body"] or ""):
         raise Refused(f"issue {number} has no criteria to start from: {why}")
-    linked = [node["ref"]["name"] for node in issue["linkedBranches"]["nodes"] if node.get("ref")]
+    # GitHub stops listing a linked branch once a pull request from it is connected to the issue.
+    linked = list(dict.fromkeys(
+        [node["ref"]["name"] for node in issue["linkedBranches"]["nodes"] if node.get("ref")]
+        + [pull["headRefName"] for pull in issue["closedByPullRequestsReferences"]["nodes"]
+           if pull["state"] == "OPEN" and not pull["isCrossRepository"]]))
     if len(linked) > 1:
         raise Refused(f"issue {number} has {len(linked)} linked branches: {', '.join(linked)}")
     if linked:

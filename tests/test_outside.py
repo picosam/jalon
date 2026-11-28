@@ -1110,15 +1110,18 @@ GRAPHQL = "api graphql --hostname github.com -f query="
 
 
 def issue(outside, state="OPEN", body=None, title="Start the work here now", edited="2026-11-28T14:08:01Z",
-          linked=()):
-    """Issue 15 of owner/name, whose default branch is main."""
+          linked=(), closing=()):
+    """Issue 15 of owner/name, whose default branch is main; `closing` names the head branches of the open pull
+    requests that close it."""
     from conftest import BODY
     answer(outside, "repo-url", "https://github.com/owner/name\n")
     nodes = [{"ref": {"name": branch}} for branch in linked]
     answer(outside, "api-graphql", json.dumps({"data": {"repository": {
         "defaultBranchRef": {"name": "main"},
         "issue": {"title": title, "body": BODY if body is None else body, "state": state, "lastEditedAt": edited,
-                  "createdAt": "2026-11-28T14:00:00Z", "linkedBranches": {"nodes": nodes}}}}}))
+                  "createdAt": "2026-11-28T14:00:00Z", "linkedBranches": {"nodes": nodes},
+                  "closedByPullRequestsReferences": {"nodes": [
+                      {"state": "OPEN", "headRefName": branch, "isCrossRepository": False} for branch in closing]}}}}}))
 
 
 @pytest.mark.parametrize("state, body, said", [
@@ -1156,6 +1159,16 @@ def test_start_makes_or_reuses_the_linked_branch_and_checks_it_out(repo, outside
     assert done.stdout == f"{branch}\n"
     assert calls(outside, "issue develop") == [
         f"issue develop 15 --repo https://github.com/owner/name --base main --name {branch} --checkout"]
+
+
+@pytest.mark.parametrize("linked", [(), ("15-start",)])
+def test_start_reuses_the_branch_of_an_open_pull_request_that_closes_the_issue(repo, outside, private_list, linked):
+    # GitHub stops listing a linked branch once a pull request from it is connected to the issue.
+    issue(outside, linked=linked, closing=("15-start",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, "issue develop") == [
+        "issue develop 15 --repo https://github.com/owner/name --base main --name 15-start --checkout"]
 
 
 def test_start_refuses_an_issue_with_more_than_one_linked_branch(repo, outside):

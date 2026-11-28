@@ -170,7 +170,11 @@ It reads the issue and the repository's default branch in one
 `gh api graphql` call, and refuses, making no branch and posting nothing, an
 issue that is not open, one whose body has no `## Done when` section, and one
 whose "Done when" holds no list line outside code. An issue with more than one
-linked branch is refused too, naming them.
+linked branch is refused too, naming them. The issue's linked branches are
+those GitHub lists and the head branch of each open pull request in the same
+repository that GitHub records as closing the issue: measured on 2026-11-28 on
+this repository's issue 15, GitHub stopped listing the issue's linked branch
+once a pull request from it was connected to the issue by `Closes #15`.
 
 With no linked branch it makes one named `<n>-<name>`: `<name>` is the value
 of `--name`, or the first three words of the issue's title, lowercased, each a
