@@ -17,6 +17,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
 | `jalon status tests\|title` | Posts `jalon/tests` or `jalon/title` on a pull request's head commit: the tests the default branch declares in `jalon.toml`, run in this checkout, or the title against the private list and the declared vocabulary. |
 | `jalon commit message\|branch` | git's `commit-msg` and `pre-commit` hooks: a commit's subject against the vocabulary `jalon.toml` declares, and a commit on the default branch against its data folders. |
+| `jalon start` | Checks out an issue's linked branch in this checkout, making it if the issue has none, after refusing an issue with no "Done when"; records on the issue when its criteria were read. |
 
 ## The private list
 
@@ -158,6 +159,42 @@ The merge gate is three required statuses, `jalon/tests`, `jalon/title` and
 head carries none until they are posted on it, and where the branch rule
 accepts them from any app, as this repository's does, GitHub does not check
 who posted them.
+
+## Starting an issue's work
+
+`jalon start <n>` begins the work of issue `<n>` of the checkout's repository
+(read with `GH_REPO` left out) on the issue's linked branch, in the checkout it
+runs in, a linked worktree included.
+
+It reads the issue and the repository's default branch in one
+`gh api graphql` call, and refuses, making no branch and posting nothing, an
+issue that is not open, one whose body has no `## Done when` section, and one
+whose "Done when" holds no list line outside code. An issue with more than one
+linked branch is refused too, naming them.
+
+With no linked branch it makes one named `<n>-<name>`: `<name>` is the value
+of `--name`, or the first three words of the issue's title, lowercased, each a
+run of ASCII letters and digits, joined by `-`. With one it reuses that
+branch. Either way it runs `gh issue develop <n> --base <default branch>
+--name <branch> --checkout`, then posts one comment on the issue: the branch,
+and the time the criteria were read as of, the body's last edit or, where it
+was never edited, the issue's creation. On a repository that is not private
+the comment passes the private list first and is not posted if refused. The
+issue's own edit history then shows any later change to its criteria.
+
+It prints one line for each of the `pre-push`, `pre-commit` and `commit-msg`
+hooks that is missing or not executable at `git rev-parse --git-path
+hooks/<name>`, and starts all the same. It does not read what a hook holds.
+
+Read from `gh` 2.106.0's source, `pkg/cmd/issue/develop/develop.go`: given
+`--name`, `gh` reuses an existing linked branch of that name in the same
+repository, fetches the branch, and checks it out in this checkout with
+`git checkout <branch>`, or `git checkout -b <branch> --track
+<remote>/<branch>` where no local branch exists. Measured with `git checkout`
+itself, git 2.54.0: it refuses a checkout whose uncommitted changes would be
+overwritten and a branch checked out in another worktree, and carries other
+uncommitted changes and untracked files onto the branch. A refusal there stops
+`jalon start` before the comment.
 
 ## Posting the tests and the title
 
