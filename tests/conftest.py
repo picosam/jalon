@@ -65,7 +65,7 @@ for arg; do
   prev=$arg
 done
 key="$1-$2"
-case "$*" in *"--json url"*) key=repo-url;; esac
+case "$*" in *"--json url"*) key=repo-url;; *"/contents/"*) key=api-contents;; *"/statuses/"*) key=api-statuses;; esac
 code=0
 [ -f "$GH_STANDIN/$key.exit" ] && code=$(cat "$GH_STANDIN/$key.exit")
 [ -f "$GH_STANDIN/$key.out" ] && cat "$GH_STANDIN/$key.out"
@@ -111,7 +111,8 @@ def outside(tmp_path, monkeypatch):
     """What a test from outside needs on PATH: the real command under the
     name `jalon`, and a stand-in `gh`. Returns the stand-in's folder: write
     `<word>-<word>.out` and `.exit` there to set an answer (`repo-url` for the
-    read of the checkout's repository); read `calls`. Like the installed
+    read of the checkout's repository, `api-contents` for a file GitHub holds,
+    `api-statuses` for a status posted); read `calls`. Like the installed
     script, the command does not look for modules in the folder it runs in
     (-P); it finds its own source first and hands PYTHONPATH on untouched."""
     bin = tmp_path / "bin"

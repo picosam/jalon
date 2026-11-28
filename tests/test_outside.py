@@ -13,7 +13,7 @@ import zipfile
 
 import pytest
 
-from conftest import run
+from conftest import LIST, run
 
 pytestmark = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="these tests run the real gitleaks")
 
@@ -770,3 +770,112 @@ def test_leak_commits_reads_a_range(repo, private_list):
     commit(repo, "second.txt", "a clean line\n", f"as {NAME} asked")
     assert run("jalon", "leak", "commits", "origin/main..HEAD", cwd=repo).returncode == 1
     assert run("jalon", "leak", "commits", "origin/main..origin/main", cwd=repo).returncode == 0
+
+
+# status: the two posts, and the refusals that keep a pull request from choosing what judges it.
+
+DECLARED = '[tests]\nplace = "here"\ncommands = ["touch ran-1", "true"]\n'
+STATUSES = "api repos/owner/name/statuses/"
+
+
+def pull(outside, repo, title="A clean title", state="OPEN", head=None, declared=DECLARED):
+    """Pull request 5 of owner/name, at `head` (the checkout's HEAD unless
+    given), with `declared` as the default branch's jalon.toml (None: it has
+    none)."""
+    head = head or run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+    answer(outside, "repo-url", "https://github.com/owner/name\n")
+    answer(outside, "pr-view", json.dumps({"state": state, "headRefOid": head, "title": title}))
+    answer(outside, "api-contents", *(('{"message":"Not Found"}', 1) if declared is None else (declared,)))
+    return head
+
+
+def test_status_tests_runs_the_declared_commands_here_and_posts_success(repo, outside, private_list):
+    head = pull(outside, repo)
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert (repo / "ran-1").exists()
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/tests "
+        f"-f description=2 commands passed at {head[:7]}; run here by jalon status tests"]
+    # Read with no ref: GitHub answers with the default branch's file.
+    assert calls(outside, "api repos/owner/name/contents/") == [
+        "api repos/owner/name/contents/jalon.toml --hostname github.com -H Accept: application/vnd.github.raw+json"]
+
+
+def test_status_tests_posts_failure_at_the_first_command_that_fails(repo, outside, private_list):
+    head = pull(outside, repo, declared='[tests]\nplace = "here"\ncommands = ["true", "exit 3", "touch never"]\n')
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 1 and not (repo / "never").exists()
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=failure -f context=jalon/tests "
+        f"-f description=Command 2 of 3 exited 3 at {head[:7]}; run here by jalon status tests"]
+
+
+@pytest.mark.parametrize("case, said", [
+    ("merged", "is merged, not open"),
+    ("elsewhere", "not at pull request 5's head"),
+    ("changed", "git status shows changes"),
+    ("untracked", "git status shows changes"),
+])
+def test_status_tests_refuses_a_checkout_that_is_not_the_head_and_posts_nothing(repo, outside, private_list,
+                                                                               case, said):
+    first = run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
+    if case == "elsewhere":
+        commit(repo, "second.txt", "a clean line\n", "the second commit")
+    pull(outside, repo, state="MERGED" if case == "merged" else "OPEN", head=first)
+    if case == "changed":
+        (repo / "first.txt").write_text("a changed line\n")
+    if case == "untracked":
+        (repo / "new.txt").write_text("a clean line\n")
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 1 and said in done.stderr
+    assert calls(outside, STATUSES) == [] and not (repo / "ran-1").exists()
+
+
+@pytest.mark.parametrize("declared", [None, '[tests]\nplace = "github"\ncommands = ["touch ran-1"]\n'])
+def test_status_tests_runs_nothing_without_a_declaration_it_can_run_on_the_default_branch(repo, outside, private_list,
+                                                                                         declared):
+    pull(outside, repo, declared=declared)
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 1 and calls(outside, STATUSES) == [] and not (repo / "ran-1").exists()
+
+
+def test_status_tests_runs_the_default_branchs_commands_not_the_pull_requests(repo, outside, private_list):
+    commit(repo, "jalon.toml", '[tests]\nplace = "here"\ncommands = ["touch ran-by-the-pull-request"]\n', "declare")
+    pull(outside, repo, declared='[tests]\nplace = "here"\ncommands = ["touch ran-by-the-default-branch"]\n')
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert (repo / "ran-by-the-default-branch").exists() and not (repo / "ran-by-the-pull-request").exists()
+
+
+def test_status_title_posts_success_for_a_title_the_list_passes(repo, outside, private_list):
+    head = pull(outside, repo)
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/title "
+        "-f description=The title passes the private list; posted by jalon status title"]
+
+
+def test_status_title_posts_failure_for_a_title_with_a_listed_name(repo, outside, private_list):
+    head = pull(outside, repo, title=f"Ask {NAME} first")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "private-name" in done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=failure -f context=jalon/title "
+        "-f description=The title does not pass the private list; posted by jalon status title"]
+
+
+def test_status_title_posts_nothing_on_a_private_repository(repo, outside, private_list):
+    pull(outside, repo, title=f"Ask {NAME} first")
+    answer(outside, "repo-view", "PRIVATE\n")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "checks nothing yet" in done.stderr and calls(outside, STATUSES) == []
+
+
+def test_a_description_the_list_refuses_is_not_posted(repo, outside, private_list):
+    private_list.write_text(LIST + "\n[[rules]]\nid = \"a-phrase\"\ndescription = \"a listed phrase\"\n"
+                                   "regex = '''posted by jalon'''\n")
+    pull(outside, repo)
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "a-phrase" in done.stderr and calls(outside, STATUSES) == []

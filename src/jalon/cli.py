@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import leak, park
+from . import leak, park, status
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,6 +43,13 @@ def _parser() -> argparse.ArgumentParser:
     hook.add_argument("url")
 
     commands.add_parser("push", help="git push with the leak check forced on").add_argument("args", nargs=argparse.REMAINDER)
+
+    posted = commands.add_parser("status", help="post jalon/tests or jalon/title on a pull request's head commit")
+    posts = posted.add_subparsers(dest="verb", required=True)
+    posts.add_parser("tests", help="run the tests the default branch declares, here, and post jalon/tests"
+                     ).add_argument("number", type=int, help="the pull request")
+    posts.add_parser("title", help="check the title against the private list and post jalon/title"
+                     ).add_argument("number", type=int, help="the pull request")
     return top
 
 
@@ -74,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
                 lines = sys.stdin.read()
                 leak.pre_push(args.remote, args.url, lines.split("\n"))
                 return leak.next_hook(args.remote, args.url, lines)
+            case "status", "tests":
+                return status.tests(args.number)
+            case "status", "title":
+                return status.title(args.number)
     except leak.Refused as refusal:
         print(f"jalon: refused: {refusal}", file=sys.stderr)
         return 1

@@ -1,0 +1,10 @@
+# jalon's own declaration. `jalon status tests` reads it as the default branch
+# holds it: a change here judges the pull requests after the one that makes it.
+
+[tests]
+place = "here"
+commands = [
+    'uv run --python 3.15 pytest',
+    'd=$(mktemp -d) && git clone --quiet "$PWD" "$d/jalon" && (cd "$d/jalon" && uv run --python 3.15 pytest)',
+    'e=$(mktemp -d) && git archive HEAD | tar -x -C "$e" && uv run --python 3.15 jalon leak dir "$e"',
+]

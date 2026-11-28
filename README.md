@@ -15,6 +15,7 @@ It needs Python 3.15, `gh`, git and gitleaks, and has no other dependency.
 | `jalon park close` | Records a decision GitHub shows closed as completed: its record in `decisions/` at the top of the checkout, with one line in `decisions/index.jsonl`. It refuses an open issue and changes nothing on GitHub. A decision it replaces loses its record through `git rm` on `decisions/<number>-*.md`, whose own lines say what was removed; a removal is left staged, and if git refuses, jalon stops and writes no record. A close that finds a record (or its `.part` file) or a line already there for the decision refuses and names it; a person reconciles it with git. With `--repo`, the repository the issue was closed in, it refuses one that is not the checkout's. |
 | `jalon leak text\|dir\|commits` | Refuses a text, a folder or a range of commits that holds a secret or a name on the machine's private list. In a folder: every text file's content, every file name and link target. In commits: the objects a push of them would send, each read whole as git stores it, with no patch in between: each new file, every path of each commit, and each commit's or tag's own text. A file that is not text is named in the output as not read. |
 | `jalon push` | `git push` with that check forced on, on what the destination does not hold, ref names and tags included; an option that skips hooks is refused, and the repository's own pre-push hook still runs. |
+| `jalon status tests\|title` | Posts `jalon/tests` or `jalon/title` on a pull request's head commit: the tests the default branch declares in `jalon.toml`, run in this checkout, or the title against the private list. |
 
 ## The private list
 
@@ -156,6 +157,31 @@ The merge gate is three required statuses, `jalon/tests`, `jalon/title` and
 head carries none until they are posted on it, and where the branch rule
 accepts them from any app, as this repository's does, GitHub does not check
 who posted them.
+
+## Posting the tests and the title
+
+`jalon status tests <n>` and `jalon status title <n>` post two of the three
+statuses on pull request `<n>`'s head commit; `jalon/review` is posted by
+hand.
+
+`jalon status tests` reads `jalon.toml` as the repository's default branch
+holds it on GitHub, so a pull request cannot change the commands that judge
+it: the pull request that changes `jalon.toml` is judged by the commands the
+default branch held before it. It runs each command of the `commands` list
+under `[tests]`, in order, with `sh -c` at the top of the checkout, and posts
+`success` when every one exits 0, or `failure` at the first that does not,
+with that command's place in the list and its exit code. It refuses, and
+posts nothing, unless the pull request is open, the checkout is at its head
+commit, `git status --porcelain` prints nothing, and `[tests]` holds
+`place = "here"` and a list of commands and nothing else. The commands run
+with the rights of whoever runs it.
+
+`jalon status title` passes the pull request's title through the private list
+and posts `success` or `failure`. On a private repository it checks nothing
+yet and posts nothing.
+
+On a repository that is not private, each status's description passes the
+private list before it is sent.
 
 ## Before a repository's first `park file`
 
