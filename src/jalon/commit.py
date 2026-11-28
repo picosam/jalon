@@ -24,9 +24,9 @@ DECLARATION = "jalon.toml"
 TYPES = ("change", "fix", "refactor", "guard", "test", "document", "design", "record", "deliver", "maintain", "revert")
 KEYS = {"types", "scopes", "retired", "data"}
 TYPE = re.compile(r"[a-z]+")
-SCOPE = re.compile(r"[a-z-]+")
+SCOPE = re.compile(r"[a-z]+(?:-[a-z]+)*")
 SUBJECT = re.compile(r"(?P<type>[a-z]+)(?:\((?P<scope>[a-z-]+)\))?!?: \S.*")
-REVERT = re.compile(r'(?:Revert|Reapply) ".+"')
+REVERT = re.compile(r'(?:Revert|Reapply) ".*"')
 FORM = "<type>[(<scope>)][!]: <subject>"
 
 
@@ -96,9 +96,10 @@ def judge(subject: str, vocabulary: dict) -> str | None:
 
 
 def _git(*args: str, input: bytes | None = None) -> subprocess.CompletedProcess:
-    """git, as bytes, never fetching a missing object: what is not in this clone is not read."""
+    """git, as bytes, never fetching a missing object and never reading a replacement for one: what is read is
+    what this clone records."""
     return subprocess.run(["git", *args], input=input, capture_output=True,
-                          env={**os.environ, "GIT_NO_LAZY_FETCH": "1"})
+                          env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1"})
 
 
 def subject_of(message: bytes) -> str:
@@ -160,15 +161,13 @@ def message(path: Path) -> None:
 
 def branch() -> None:
     """git's `pre-commit` hook: on the default branch, every staged path inside a declared data folder."""
-    head = _git("symbolic-ref", "--quiet", "HEAD")
-    if head.returncode != 0:
-        return  # detached: no branch
     try:
         vocabulary = _at_head()
     except Unreadable as problem:
         return _warn(problem)
-    if vocabulary is None:
-        return
+    head = _git("symbolic-ref", "--quiet", "HEAD")
+    if vocabulary is None or head.returncode != 0:
+        return  # nothing declared, or detached: no branch
     origin = _git("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
     if origin.returncode != 0:
         return _warn("this clone has no refs/remotes/origin/HEAD to name the default branch "
@@ -176,7 +175,7 @@ def branch() -> None:
     default = origin.stdout.removesuffix(b"\n").removeprefix(b"refs/remotes/origin/")
     if head.stdout.removesuffix(b"\n") != b"refs/heads/" + default:
         return
-    staged = _git("diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD")
+    staged = _git("diff", "--cached", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", "HEAD")
     if staged.returncode != 0:
         raise Refused(f"git diff --cached: {staged.stderr.decode(errors='replace').strip()}")
     for path in staged.stdout.split(b"\0"):

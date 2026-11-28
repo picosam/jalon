@@ -15,6 +15,7 @@ DEFAULT = commit.rules({})
     "fix!: a breaking fix",
     'Revert "change: check commit subjects"',
     'Reapply "Revert \\"change: x\\""',
+    'Revert ""',
 ])
 def test_a_subject_in_the_grammar_with_a_declared_type_passes(subject):
     assert commit.judge(subject, DEFAULT) is None
@@ -57,6 +58,7 @@ def test_the_eleven_types_are_the_default_and_a_list_replaces_them_wholly():
     ({"types": ["Change"]}, "types must be a list"),
     ({"types": ["re-vert"]}, "types must be a list"),
     ({"scopes": ["a b"]}, "scopes must be a list"),
+    ({"scopes": ["-"]}, "scopes must be a list"),
     ({"scopes": ["fix"]}, "'fix' both as a type and as a scope"),
     ({"retired": ["plan"]}, "retired must be a table"),
     ({"retired": {"fix": "change"}}, "retires 'fix', which it also declares"),

@@ -218,9 +218,12 @@ no scope and no data folder; a repository with no `[commits]` is not checked.
 first paragraph that `git stripspace --strip-comments` keeps, its lines joined
 by one space. `jalon commit branch`, while `HEAD` is the branch
 `refs/remotes/origin/HEAD` names, refuses a commit when a path it stages lies
-outside every declared data folder; on any other branch, or with `HEAD`
+outside every declared data folder, a submodule included whatever its
+`ignore` setting; on any other branch, or with `HEAD`
 detached, it lets the commit land. Both read `jalon.toml` from the tree `HEAD`
-records, never from the working tree or the index, and fetch nothing. A
+records, never from the working tree, the index or a replacement object, and
+fetch nothing. A data folder is written as git writes paths, with no leading
+`./`. A
 `[commits]` they cannot read, or a clone with no `refs/remotes/origin/HEAD`,
 gets one warning line and no check, so the commit that repairs it can land.
 
@@ -246,11 +249,12 @@ What the hooks are handed is git's, and these limits were measured with git
 - `commit-msg` is handed the message before git cleans it up, and jalon reads
   it as `git stripspace --strip-comments` leaves it, whatever cleanup the
   commit uses. So the subject jalon judges differed from the one git recorded
-  for a message given with `-m` whose first line starts with `#` (git keeps
-  that line), the same under `commit.cleanup = verbatim` or
-  `core.commentChar = auto`, and one under `core.commentChar` set to another
-  character (git drops that character's lines, jalon keeps them). A verbose
-  commit, measured once, was judged as git recorded it.
+  for a message given with `-m` whose first line is a comment line, `#` or
+  the character `core.commentChar` sets (git keeps that line under `-m`,
+  jalon drops it), and the same under `commit.cleanup = verbatim` or
+  `core.commentChar = auto`. Under `commit.cleanup = strip` with a declared
+  comment character, both dropped it. A verbose commit, measured once, was
+  judged as git recorded it.
 - A clone with no `refs/remotes/origin/HEAD` gets a warning and no check of
   the default branch.
 - `git commit --no-verify` runs neither hook.

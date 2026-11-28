@@ -1063,3 +1063,42 @@ def test_status_title_without_a_declaration_checks_the_list_alone(repo, outside,
     assert calls(outside, STATUSES) == [
         f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/title "
         "-f description=The title passes the private list; posted by jalon status title"]
+
+
+# commit: the answers to the read of its pull request.
+
+def test_a_replacement_object_does_not_choose_the_rules_the_hooks_read(declared):
+    blob = run("git", "hash-object", "-w", "--stdin", cwd=declared,
+               input='[commits]\ntypes = ["feat"]\ndata = ["src/"]\n').stdout.strip()
+    recorded = run("git", "rev-parse", "HEAD:jalon.toml", cwd=declared).stdout.strip()
+    assert run("git", "replace", recorded, blob, cwd=declared).returncode == 0
+    done = attempt(declared, "src/a.txt", "feat: chosen by a replacement")
+    assert done.returncode == 1 and "outside every data folder" in done.stderr
+
+
+def test_a_submodule_its_settings_hide_from_a_diff_is_still_refused_on_the_default_branch(declared, tmp_path):
+    sub = tmp_path / "sub"
+    run("git", "init", "-q", "-b", "main", sub)
+    run("git", "commit", "-q", "--allow-empty", "-m", "s", cwd=sub)
+    run("git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "external", cwd=declared)
+    run("git", "config", "-f", ".gitmodules", "submodule.external.ignore", "all", cwd=declared)
+    run("git", "add", ".gitmodules", cwd=declared)
+    assert run("git", "commit", "-q", "--no-verify", "-m", "change: add a submodule", cwd=declared).returncode == 0
+    run("git", "commit", "-q", "--allow-empty", "-m", "s2", cwd=declared / "external")
+    run("git", "add", "-f", "external", cwd=declared)
+    assert run("git", "diff", "--cached", "--name-only", cwd=declared).stdout == ""  # hidden from a plain diff
+    done = run("git", "commit", "-q", "-m", "change: move the submodule", cwd=declared)
+    assert done.returncode == 1 and "'external' lies outside every data folder" in done.stderr
+
+
+def test_a_data_path_that_is_not_ascii_lands_on_the_default_branch(declared):
+    assert attempt(declared, "records/caf\u00e9 notes.txt", "record: a name git quotes").returncode == 0
+
+
+def test_a_detached_head_still_warns_about_a_declaration_it_cannot_read(declared):
+    (declared / "jalon.toml").write_text('[commits]\nselect = ["x"]\n')
+    run("git", "add", "jalon.toml", cwd=declared)
+    assert run("git", "commit", "-q", "--no-verify", "-m", "x", cwd=declared).returncode == 0
+    run("git", "switch", "-q", "--detach", cwd=declared)
+    done = attempt(declared, "src.txt", "Any subject at all")
+    assert done.returncode == 0 and done.stderr.count("jalon: warning:") == 2
