@@ -785,7 +785,7 @@ def pull(outside, repo, title="A clean title", state="OPEN", head=None, declared
     head = head or run("git", "rev-parse", "HEAD", cwd=repo).stdout.strip()
     answer(outside, "repo-url", "https://github.com/owner/name\n")
     answer(outside, "pr-view", json.dumps({"state": state, "headRefOid": head, "title": title}))
-    answer(outside, "api-contents", *(('{"message":"Not Found"}', 1) if declared is None else (declared,)))
+    answer(outside, "api-contents", *(("gh: Not Found (HTTP 404)", 1) if declared is None else (declared,)))
     return head
 
 
@@ -913,6 +913,151 @@ def test_a_repository_made_public_while_the_tests_ran_gets_a_checked_description
 
 def test_status_title_posts_on_a_closed_pull_request(repo, outside, private_list):
     head = pull(outside, repo, state="CLOSED")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/title "
+        "-f description=The title passes the private list; posted by jalon status title"]
+
+
+# commit: the two hooks, run by git itself, and the title against the default branch's vocabulary.
+
+def hooks(repo):
+    """git's own pre-commit and commit-msg hooks in `repo`, each two lines running jalon."""
+    for name, line in (("pre-commit", "exec jalon commit branch"), ("commit-msg", 'exec jalon commit message "$1"')):
+        hook = repo / ".git" / "hooks" / name
+        hook.write_text(f"#!/bin/sh\n{line}\n")
+        hook.chmod(0o755)
+
+
+@pytest.fixture
+def declared(repo):
+    """The repository with `[commits]` committed, `records/` its data folder, origin/HEAD naming main, and the
+    two hooks in place."""
+    commit(repo, "jalon.toml", '[commits]\ndata = ["records/"]\n', "change: declare the commit rules")
+    run("git", "remote", "set-head", "origin", "main", cwd=repo)
+    hooks(repo)
+    return repo
+
+
+def attempt(repo, name, message, text="a clean line\n"):
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    run("git", "add", name, cwd=repo)
+    return run("git", "commit", "-q", "-m", message, cwd=repo)
+
+
+def test_a_commit_on_the_default_branch_outside_the_data_folders_is_refused(declared):
+    before = run("git", "rev-parse", "HEAD", cwd=declared).stdout
+    done = attempt(declared, "src.txt", "change: a change made on main")
+    assert done.returncode == 1 and "'src.txt' lies outside every data folder" in done.stderr
+    assert run("git", "rev-parse", "HEAD", cwd=declared).stdout == before
+
+
+def test_a_data_only_commit_lands_on_the_default_branch(declared):
+    assert attempt(declared, "records/one.txt", "record: one record").returncode == 0
+
+
+def test_a_commit_on_another_branch_lands(declared):
+    run("git", "switch", "-q", "-c", "13-work", cwd=declared)
+    done = attempt(declared, "src.txt", "change: a change made on a branch")
+    assert done.returncode == 0 and done.stderr == ""
+
+
+def test_a_detached_head_lands(declared):
+    run("git", "switch", "-q", "--detach", cwd=declared)
+    assert attempt(declared, "src.txt", "change: a change made detached").returncode == 0
+
+
+@pytest.mark.parametrize("subject", ["Check commit subjects", "feat: a type it does not declare"])
+def test_a_subject_outside_the_vocabulary_is_refused_by_the_hook(declared, subject):
+    run("git", "switch", "-q", "-c", "13-work", cwd=declared)
+    done = attempt(declared, "src.txt", subject)
+    assert done.returncode == 1 and "the commit subject" in done.stderr
+
+
+def test_the_hooks_read_the_declaration_head_records_not_the_working_tree(declared):
+    (declared / "jalon.toml").write_text('[commits]\ntypes = ["feat"]\ndata = ["src/"]\n')
+    run("git", "add", "jalon.toml", cwd=declared)
+    done = attempt(declared, "src/a.txt", "feat: the edit declares it")
+    assert done.returncode == 1 and "outside every data folder" in done.stderr
+    run("git", "switch", "-q", "-c", "13-work", cwd=declared)
+    done = attempt(declared, "src/a.txt", "feat: the edit declares it")
+    assert done.returncode == 1 and "the type 'feat' is not declared" in done.stderr
+
+
+@pytest.mark.parametrize("case", ["no jalon.toml", "no [commits]", "unborn"])
+def test_without_a_declaration_at_head_nothing_is_checked_or_said(alone, outside, case):
+    run("git", "init", "-q", "-b", "main", alone)
+    if case != "unborn":
+        commit(alone, "jalon.toml" if case == "no [commits]" else "first.txt", '[tests]\nplace = "here"\n', "first")
+        run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=alone)
+        run("git", "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", cwd=alone)
+    hooks(alone)
+    done = attempt(alone, "src.txt", "Any subject at all")
+    assert done.returncode == 0 and done.stderr == ""
+
+
+@pytest.mark.parametrize("declaration, said", [
+    ('[commits]\nselect = ["x"]\n', "'select'"),
+    ("[commits\n", "is not TOML"),
+    (None, "no refs/remotes/origin/HEAD"),
+])
+def test_a_declaration_or_a_default_branch_it_cannot_read_warns_and_lands(declared, declaration, said):
+    if declaration is None:
+        run("git", "remote", "set-head", "origin", "--delete", cwd=declared)
+    else:
+        (declared / "jalon.toml").write_text(declaration)
+        run("git", "add", "jalon.toml", cwd=declared)
+        assert run("git", "commit", "-q", "--no-verify", "-m", "x", cwd=declared).returncode == 0
+    done = attempt(declared, "src.txt", "change: a subject the vocabulary passes")
+    assert done.returncode == 0 and said in done.stderr and done.stderr.count("jalon: warning:") == 2 - (
+        declaration is None)
+
+
+def test_status_title_checks_the_vocabulary_the_default_branch_declares(repo, outside, private_list):
+    head = pull(outside, repo, title="Check commit subjects", declared="[commits]\n")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "does not read" in done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=failure -f context=jalon/title "
+        "-f description=The title does not read as jalon.toml [commits] allows; posted by jalon status title"]
+
+
+def test_status_title_posts_success_for_a_title_the_list_and_the_vocabulary_pass(repo, outside, private_list):
+    head = pull(outside, repo, title="change: check commit subjects", declared="[commits]\n")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/title -f description=The title "
+        "passes the private list and the declared vocabulary; posted by jalon status title"]
+
+
+@pytest.mark.parametrize("title, state", [("change: check commit subjects", "success"), ("Check them", "failure")])
+def test_status_title_checks_the_grammar_alone_on_a_private_repository(repo, outside, title, state):
+    pull(outside, repo, title=title, declared="[commits]\n")
+    answer(outside, "repo-view", "PRIVATE\n")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == (state == "failure")
+    posted = calls(outside, STATUSES)
+    assert len(posted) == 1 and f"-f state={state} " in posted[0] and "private list" not in posted[0]
+
+
+def test_status_title_refuses_a_commits_table_it_cannot_read_and_posts_nothing(repo, outside, private_list):
+    pull(outside, repo, title="change: x", declared='[commits]\ntypes = "change"\n')
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "types must be a list" in done.stderr and calls(outside, STATUSES) == []
+
+
+def test_status_title_reads_the_default_branchs_vocabulary_not_the_pull_requests(repo, outside, private_list):
+    commit(repo, "jalon.toml", '[commits]\ntypes = ["feat"]\n', "feat: declare feat")
+    pull(outside, repo, title="feat: a type only the pull request declares", declared="[commits]\n")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 1 and "the type 'feat' is not declared" in done.stderr
+
+
+def test_status_title_without_a_declaration_checks_the_list_alone(repo, outside, private_list):
+    head = pull(outside, repo, title="Any title at all", declared=None)
     done = run("jalon", "status", "title", "5", cwd=repo)
     assert done.returncode == 0, done.stderr
     assert calls(outside, STATUSES) == [

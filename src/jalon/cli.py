@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import leak, park, status
+from . import commit, leak, park, status
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     hook.add_argument("url")
 
     commands.add_parser("push", help="git push with the leak check forced on").add_argument("args", nargs=argparse.REMAINDER)
+
+    checked = commands.add_parser("commit", help="the commit rules jalon.toml declares, run from git's hooks")
+    hooks = checked.add_subparsers(dest="verb", required=True)
+    hooks.add_parser("message", help="git's commit-msg hook: the subject against the declared vocabulary"
+                     ).add_argument("file", type=Path, help="the commit message file git hands the hook")
+    hooks.add_parser("branch", help="git's pre-commit hook: on the default branch, only the declared data folders")
 
     posted = commands.add_parser("status", help="post jalon/tests or jalon/title on a pull request's head commit")
     posts = posted.add_subparsers(dest="verb", required=True)
@@ -81,6 +87,10 @@ def main(argv: list[str] | None = None) -> int:
                 lines = sys.stdin.read()
                 leak.pre_push(args.remote, args.url, lines.split("\n"))
                 return leak.next_hook(args.remote, args.url, lines)
+            case "commit", "message":
+                commit.message(args.file)
+            case "commit", "branch":
+                commit.branch()
             case "status", "tests":
                 return status.tests(args.number)
             case "status", "title":
