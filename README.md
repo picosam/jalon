@@ -76,8 +76,10 @@ The check does not catch:
 
 - a private fact told in other words, or a name that is not on the list;
 - a file that is not text: an image, an archive, an office file, or a text
-  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
-  is named in the output, `jalon: not read, as it is not text: '<name>'`.
+  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. One
+  whose bytes do not decode, or hold a NUL, is named in the output,
+  `jalon: not read, as it is not text: '<name>'`; one whose bytes happen to
+  decode without a NUL is not.
   The notice changes nothing by itself: such a file still goes to gitleaks,
   handed on as said above, the result is what gitleaks makes of it, and
   jalon does not check that. Archives are not opened: no member is taken
@@ -104,11 +106,14 @@ The check does not catch:
   same file under a new name is not read again, though its new name is.
   What it holds is asked of git by the push's address. Where git would read
   that address as another one, a remote of that name or a rewrite rule,
-  nothing counts as held and the whole push is scanned;
+  nothing counts as held and the whole push is scanned. A remote of the
+  address's very name, set to list through a program of its own, is not
+  seen: what that program lists counts as held;
 - a push that SSH or git sends somewhere else than its address reads: by a
   port, a host alias or a rewrite rule. GitHub's answer is about the owner
-  and name in the address as written, and a private one leaves that push
-  unscanned;
+  and name in the address as `gh` reads it, which is not always the host git
+  connects to (`gh` drops a leading `www.`), and a private one leaves that
+  push unscanned;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
 - what a `pre-push` hook registered in git's configuration does
@@ -127,7 +132,9 @@ The commit scan can also refuse what a push does not send. It reads every
 path of each commit it is given, those the destination already holds too: a
 listed name in such a path refuses every push, until a commit renames it
 away. It runs one `git ls-tree` per commit, so a first push of a long history
-takes longer: about 10 seconds for 1,000 commits of 2,000 files.
+takes longer: about 10 seconds for 1,000 commits of 2,000 files. And
+`jalon push` refuses a source written across lines, which git accepts: push
+the commit's id.
 
 `park close --replaces` checks nothing about the record it removes: it runs
 `git rm` on `decisions/<number>-*.md` at the top of the checkout and shows
