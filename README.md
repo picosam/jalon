@@ -101,7 +101,14 @@ The check does not catch:
   with `?` in place of each such byte. In a push, a path that is not UTF-8
   is refused;
 - content the destination already holds, which a push does not send: the
-  same file under a new name is not read again, though its new name is;
+  same file under a new name is not read again, though its new name is.
+  What it holds is asked of git by the push's address. Where git would read
+  that address as another one, a remote of that name or a rewrite rule,
+  nothing counts as held and the whole push is scanned;
+- a push that SSH or git sends somewhere else than its address reads: by a
+  port, a host alias or a rewrite rule. GitHub's answer is about the owner
+  and name in the address as written, and a private one leaves that push
+  unscanned;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
 - what a `pre-push` hook registered in git's configuration does

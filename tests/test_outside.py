@@ -291,6 +291,27 @@ def test_a_destination_not_written_as_an_address_is_scanned_without_asking(repo,
     assert calls(outside, "repo view") == []
 
 
+@pytest.mark.parametrize("listed", [False, True])
+def test_an_address_git_would_read_as_another_holds_nothing(repo, private_list, listed):
+    # The destination is the folder team/records. A remote of that very name leads elsewhere, to a
+    # repository that holds the commit being pushed: asked by its address, git would list that one.
+    for bare in ("team/records", "other.git"):
+        run("git", "init", "-q", "--bare", "-b", "main", repo / bare)
+    run("git", "remote", "set-url", "origin", "team/records", cwd=repo)
+    assert run("git", "push", "-q", "origin", "main", cwd=repo).returncode == 0
+    before = remote_tip(repo)
+    tip = commit(repo, "second.txt", f"written by {NAME if listed else 'someone'}\n", "the second commit")
+    run("git", "remote", "add", "team/records", "./other.git", cwd=repo)
+    assert run("git", "push", "-q", "team/records", "main", cwd=repo).returncode == 0
+    done = run("jalon", "push", "origin", "main", cwd=repo)
+    if listed:
+        assert done.returncode == 1 and "private-name" in done.stderr
+        assert remote_tip(repo) == before
+    else:
+        assert done.returncode == 0, done.stderr
+        assert remote_tip(repo) == [tip]
+
+
 def test_only_the_commits_being_pushed_are_scanned(repo, outside, private_list):
     # A listed name already on the remote, pushed while it was private.
     answer(outside, "repo-view", "PRIVATE\n")
