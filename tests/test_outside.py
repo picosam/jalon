@@ -879,3 +879,42 @@ def test_a_description_the_list_refuses_is_not_posted(repo, outside, private_lis
     pull(outside, repo)
     done = run("jalon", "status", "title", "5", cwd=repo)
     assert done.returncode == 1 and "a-phrase" in done.stderr and calls(outside, STATUSES) == []
+
+
+# status: the answers to the first read of its pull request.
+
+def test_status_tests_posts_nothing_when_the_checkout_moved_while_the_commands_ran(repo, outside, private_list):
+    commit(repo, "second.txt", "a clean line\n", "the second commit")
+    pull(outside, repo, declared='[tests]\nplace = "here"\ncommands = ["git checkout -q HEAD~1"]\n')
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 1 and "moved" in done.stderr and calls(outside, STATUSES) == []
+
+
+def test_status_tests_runs_at_the_top_of_a_checkout_whose_name_ends_in_a_space(alone, outside, private_list):
+    checkout, sibling = alone / "checkout ", alone / "checkout"
+    sibling.mkdir()
+    run("git", "init", "-q", "-b", "main", checkout)
+    commit(checkout, "first.txt", "a clean line\n", "the first commit")
+    answer(outside, "repo-view", "PUBLIC\n")
+    pull(outside, checkout, declared='[tests]\nplace = "here"\ncommands = ["touch ran-1"]\n')
+    done = run("jalon", "status", "tests", "5", cwd=checkout)
+    assert done.returncode == 0, done.stderr
+    assert (checkout / "ran-1").exists() and not (sibling / "ran-1").exists()
+
+
+def test_a_repository_made_public_while_the_tests_ran_gets_a_checked_description(repo, outside, private_list):
+    private_list.write_text(LIST + "\n[[rules]]\nid = \"a-phrase\"\ndescription = \"a listed phrase\"\n"
+                                   "regex = '''run here by jalon'''\n")
+    answer(outside, "repo-view", "PRIVATE\n")
+    pull(outside, repo, declared="[tests]\nplace = \"here\"\ncommands = ['printf PUBLIC > \"$GH_STANDIN/repo-view.out\"']\n")
+    done = run("jalon", "status", "tests", "5", cwd=repo)
+    assert done.returncode == 1 and "a-phrase" in done.stderr and calls(outside, STATUSES) == []
+
+
+def test_status_title_posts_on_a_closed_pull_request(repo, outside, private_list):
+    head = pull(outside, repo, state="CLOSED")
+    done = run("jalon", "status", "title", "5", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, STATUSES) == [
+        f"{STATUSES}{head} --hostname github.com -f state=success -f context=jalon/title "
+        "-f description=The title passes the private list; posted by jalon status title"]

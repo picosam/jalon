@@ -31,10 +31,7 @@ def _api(repo: str) -> tuple[str, str]:
 
 
 def _pull(repo: str, number: int) -> dict:
-    pull = json.loads(_gh("pr", "view", str(number), "--repo", repo, "--json", "state,headRefOid,title", env=_here()))
-    if pull["state"] != "OPEN":
-        raise Refused(f"pull request {number} is {pull['state'].lower()}, not open: nothing is posted")
-    return pull
+    return json.loads(_gh("pr", "view", str(number), "--repo", repo, "--json", "state,headRefOid,title", env=_here()))
 
 
 def _git(*args: str) -> str:
@@ -60,8 +57,9 @@ def declared_tests(text: str) -> list[str]:
     return commands
 
 
-def _post(repo: str, sha: str, context: str, state: str, description: str, public: bool) -> None:
-    if public:
+def _post(repo: str, sha: str, context: str, state: str, description: str) -> None:
+    """Visibility is read now, not when the command started: a run can take minutes."""
+    if leak.is_public(repo):
         leak.check_text(description)
     host, path = _api(repo)
     _gh("api", f"{path}/statuses/{sha}", "--hostname", host, "-f", f"state={state}", "-f", f"context={context}",
@@ -72,7 +70,10 @@ def _post(repo: str, sha: str, context: str, state: str, description: str, publi
 def tests(number: int) -> int:
     """Run the declared tests here, at pull request `number`'s head, and post `jalon/tests`."""
     repo = _repository()
-    head = _pull(repo, number)["headRefOid"]
+    pull = _pull(repo, number)
+    if pull["state"] != "OPEN":
+        raise Refused(f"pull request {number} is {pull['state'].lower()}, not open: nothing is posted")
+    head = pull["headRefOid"]
     if (here := _git("rev-parse", "HEAD")) != head:
         raise Refused(f"this checkout is at {here[:7]}, not at pull request {number}'s head {head[:7]}")
     if _git("status", "--porcelain"):
@@ -80,17 +81,18 @@ def tests(number: int) -> int:
     host, path = _api(repo)
     commands = declared_tests(_gh("api", f"{path}/contents/{DECLARATION}", "--hostname", host,
                                   "-H", "Accept: application/vnd.github.raw+json", env=_here()))
-    public = leak.is_public(repo)
-    top = _git("rev-parse", "--show-toplevel")
+    top = leak._git(".", "rev-parse", "--show-toplevel").removesuffix("\n")  # a name may end in a space
     for place, command in enumerate(commands, 1):
         print(f"jalon: {place} of {len(commands)}: {command}", file=sys.stderr, flush=True)
         code = subprocess.run(["sh", "-c", command], cwd=top, env={**os.environ, "PWD": top}).returncode
         if code != 0:
             _post(repo, head, "jalon/tests", "failure",
-                  f"Command {place} of {len(commands)} exited {code} at {head[:7]}; run here by jalon status tests", public)
+                  f"Command {place} of {len(commands)} exited {code} at {head[:7]}; run here by jalon status tests")
             return 1
+    if (now := _git("rev-parse", "HEAD")) != head:
+        raise Refused(f"the checkout moved from {head[:7]} to {now[:7]} while the commands ran: nothing is posted")
     _post(repo, head, "jalon/tests", "success",
-          f"{len(commands)} commands passed at {head[:7]}; run here by jalon status tests", public)
+          f"{len(commands)} commands passed at {head[:7]}; run here by jalon status tests")
     return 0
 
 
@@ -105,8 +107,8 @@ def title(number: int) -> int:
     except Refused as refusal:
         print(f"jalon: the title: {refusal}", file=sys.stderr)
         _post(repo, pull["headRefOid"], "jalon/title", "failure",
-              "The title does not pass the private list; posted by jalon status title", True)
+              "The title does not pass the private list; posted by jalon status title")
         return 1
     _post(repo, pull["headRefOid"], "jalon/title", "success",
-          "The title passes the private list; posted by jalon status title", True)
+          "The title passes the private list; posted by jalon status title")
     return 0

@@ -173,15 +173,17 @@ under `[tests]`, in order, with `sh -c` at the top of the checkout, and posts
 with that command's place in the list and its exit code. It refuses, and
 posts nothing, unless the pull request is open, the checkout is at its head
 commit, `git status --porcelain` prints nothing, and `[tests]` holds
-`place = "here"` and a list of commands and nothing else. The commands run
-with the rights of whoever runs it.
+`place = "here"` and a list of commands and nothing else. It posts nothing
+either when the checkout's `HEAD` is no longer that commit once the commands
+have run. The commands run with the rights of whoever runs it.
 
 `jalon status title` passes the pull request's title through the private list
 and posts `success` or `failure`. On a private repository it checks nothing
 yet and posts nothing.
 
 On a repository that is not private, each status's description passes the
-private list before it is sent.
+private list before it is sent; the visibility is read at that moment, not
+when the command started.
 
 A status belongs to a commit, not to a title. Measured on 2026-11-28 with
 `gh` 2.106.0: on a pull request whose head carried `jalon/title`, the title
