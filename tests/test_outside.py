@@ -1161,14 +1161,24 @@ def test_start_makes_or_reuses_the_linked_branch_and_checks_it_out(repo, outside
         f"issue develop 15 --repo https://github.com/owner/name --base main --name {branch} --checkout"]
 
 
-@pytest.mark.parametrize("linked", [(), ("15-start",)])
-def test_start_reuses_the_branch_of_an_open_pull_request_that_closes_the_issue(repo, outside, private_list, linked):
-    # GitHub stops listing a linked branch once a pull request from it is connected to the issue.
-    issue(outside, linked=linked, closing=("15-start",))
+def test_start_reuses_a_branch_github_lists_and_an_open_pull_request_names_once(repo, outside, private_list):
+    issue(outside, linked=("15-start",), closing=("15-start",))
     done = run("jalon", "start", "15", cwd=repo)
     assert done.returncode == 0, done.stderr
     assert calls(outside, "issue develop") == [
         "issue develop 15 --repo https://github.com/owner/name --base main --name 15-start --checkout"]
+
+
+def test_start_checks_out_with_git_the_branch_only_an_open_pull_request_names(repo, outside, private_list):
+    # GitHub stops listing a linked branch once a pull request from it is connected to the issue, and
+    # gh issue develop then tries to create the branch rather than reuse it.
+    assert run("git", "push", "-q", "origin", "main:refs/heads/15-start", cwd=repo).returncode == 0
+    issue(outside, closing=("15-start",))
+    done = run("jalon", "start", "15", cwd=repo)
+    assert done.returncode == 0, done.stderr
+    assert calls(outside, "issue develop") == []
+    assert run("git", "branch", "--show-current", cwd=repo).stdout == "15-start\n"
+    assert calls(outside, "issue comment") == ["issue comment 15 --repo https://github.com/owner/name --body-file -"]
 
 
 def test_start_refuses_an_issue_with_more_than_one_linked_branch(repo, outside):

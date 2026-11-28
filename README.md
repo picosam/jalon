@@ -174,13 +174,19 @@ linked branch is refused too, naming them. The issue's linked branches are
 those GitHub lists and the head branch of each open pull request in the same
 repository that GitHub records as closing the issue: measured on 2026-11-28 on
 this repository's issue 15, GitHub stopped listing the issue's linked branch
-once a pull request from it was connected to the issue by `Closes #15`.
+once a pull request from it was connected to the issue by `Closes #15`, and
+`gh issue develop --name` with that branch's name then tried to create it and
+failed (`API returned empty branch name`, gh 2.106.0). So a branch known only
+as such a pull request's head is checked out with `git fetch origin <branch>`
+and `git checkout <branch>`, not through `gh`.
 
 With no linked branch it makes one named `<n>-<name>`: `<name>` is the value
 of `--name`, or the first three words of the issue's title, lowercased, each a
-run of ASCII letters and digits, joined by `-`. With one it reuses that
-branch. Either way it runs `gh issue develop <n> --base <default branch>
---name <branch> --checkout`, then posts one comment on the issue: the branch,
+run of ASCII letters and digits, joined by `-`. With one GitHub lists it
+reuses that branch. In both cases it runs `gh issue develop <n> --base
+<default branch> --name <branch> --checkout`; a branch known only as an open
+pull request's head is checked out with git, as above. Then it posts one
+comment on the issue: the branch,
 and the time the criteria were read as of, the body's last edit or, where it
 was never edited, the issue's creation. On a repository that is not private
 the comment passes the private list first and is not posted if refused. The

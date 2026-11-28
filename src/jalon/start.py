@@ -65,10 +65,9 @@ def start(number: int, name: str | None = None) -> str:
     if why := _criteria(issue["body"] or ""):
         raise Refused(f"issue {number} has no criteria to start from: {why}")
     # GitHub stops listing a linked branch once a pull request from it is connected to the issue.
-    linked = list(dict.fromkeys(
-        [node["ref"]["name"] for node in issue["linkedBranches"]["nodes"] if node.get("ref")]
-        + [pull["headRefName"] for pull in issue["closedByPullRequestsReferences"]["nodes"]
-           if pull["state"] == "OPEN" and not pull["isCrossRepository"]]))
+    listed = [node["ref"]["name"] for node in issue["linkedBranches"]["nodes"] if node.get("ref")]
+    linked = list(dict.fromkeys(listed + [pull["headRefName"] for pull in issue["closedByPullRequestsReferences"]["nodes"]
+                                          if pull["state"] == "OPEN" and not pull["isCrossRepository"]]))
     if len(linked) > 1:
         raise Refused(f"issue {number} has {len(linked)} linked branches: {', '.join(linked)}")
     if linked:
@@ -80,7 +79,12 @@ def start(number: int, name: str | None = None) -> str:
         branch = f"{number}-{words}"
     for line in _missing_hooks():
         print(line, file=sys.stderr)
-    _gh("issue", "develop", str(number), "--repo", repo, "--base", default, "--name", branch, "--checkout", env=_here())
+    if linked and branch not in listed:  # gh issue develop would try to create it, not reuse it
+        leak._git(".", "fetch", "--quiet", "origin", branch)
+        leak._git(".", "checkout", "--quiet", branch)
+    else:
+        _gh("issue", "develop", str(number), "--repo", repo, "--base", default, "--name", branch, "--checkout",
+            env=_here())
     read_as = (f"as this issue's body was last edited at {issue['lastEditedAt']}" if issue["lastEditedAt"]
                else f"as this issue was filed at {issue['createdAt']}; its body was never edited")
     comment = f"Started by `jalon start` on branch `{branch}`. The criteria were read {read_as}."
