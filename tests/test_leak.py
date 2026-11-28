@@ -47,7 +47,7 @@ def test_no_gitleaks_refuses(private_list, monkeypatch):
 
 def test_a_private_destination_is_not_scanned(scans, monkeypatch):
     monkeypatch.setattr(leak, "is_public", lambda target=None: False)
-    leak.pre_push("origin", "url", [f"refs/heads/x {A} refs/heads/x {ZERO}"])
+    leak.pre_push("origin", "https://github.com/owner/name", [f"refs/heads/x {A} refs/heads/x {ZERO}"])
     assert scans == []
 
 

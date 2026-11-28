@@ -27,6 +27,10 @@ comment is ignored, and so is a `.gitleaksignore`, in the working folder or
 in what is scanned. A
 machine without that file cannot send anything to a public repository
 through jalon. A repository GitHub does not report as `PRIVATE` is public.
+A push's destination is asked of GitHub only when it is written as an
+address, `<scheme>://…` or `user@host:path`. Any other is scanned without
+asking: `gh` would read a folder named `team/records` as a repository of
+that name.
 A list that extends another file names it by its full path: jalon runs
 gitleaks from a folder of its own, where a relative path is not found, and a
 folder or a push is then refused, clean or not.
@@ -72,8 +76,10 @@ The check does not catch:
 
 - a private fact told in other words, or a name that is not on the list;
 - a file that is not text: an image, an archive, an office file, or a text
-  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. Each
-  is named in the output, `jalon: not read, as it is not text: '<name>'`.
+  in an encoding other than UTF-8, or UTF-16 with its byte-order mark. One
+  whose bytes do not decode, or hold a NUL, is named in the output,
+  `jalon: not read, as it is not text: '<name>'`; one whose bytes happen to
+  decode without a NUL is not.
   The notice changes nothing by itself: such a file still goes to gitleaks,
   handed on as said above, the result is what gitleaks makes of it, and
   jalon does not check that. Archives are not opened: no member is taken
@@ -97,9 +103,22 @@ The check does not catch:
   with `?` in place of each such byte. In a push, a path that is not UTF-8
   is refused;
 - content the destination already holds, which a push does not send: the
-  same file under a new name is not read again, though its new name is;
+  same file under a new name is not read again, though its new name is.
+  What it holds is asked of git by the push's address. Where git would read
+  that address as another one, a remote of that name or a rewrite rule,
+  nothing counts as held and the whole push is scanned. A remote of the
+  address's very name, set to list through a program of its own, is not
+  seen: what that program lists counts as held;
+- a push that SSH or git sends somewhere else than its address reads: by a
+  port, a host alias or a rewrite rule. GitHub's answer is about the owner
+  and name in the address as `gh` reads it, which is not always the host git
+  connects to (`gh` drops a leading `www.`), and a private one leaves that
+  push unscanned;
 - an issue's assignee, which `park file` sends unchecked: a GitHub login is
   public by nature;
+- what a `pre-push` hook registered in git's configuration does
+  (`hook.<name>.event`): git runs it before the check, and `jalon push`
+  orders the repository's hook file only;
 - git push options (`git push -o`), which `jalon push` passes to the
   destination unchecked;
 - a `jalon` command that is not jalon: it is an ordinary Python program, so a
@@ -113,14 +132,19 @@ The commit scan can also refuse what a push does not send. It reads every
 path of each commit it is given, those the destination already holds too: a
 listed name in such a path refuses every push, until a commit renames it
 away. It runs one `git ls-tree` per commit, so a first push of a long history
-takes longer: about 10 seconds for 1,000 commits of 2,000 files.
+takes longer: about 10 seconds for 1,000 commits of 2,000 files. And
+`jalon push` refuses a source written across lines, which git accepts: push
+the commit's id.
 
 `park close --replaces` checks nothing about the record it removes: it runs
 `git rm` on `decisions/<number>-*.md` at the top of the checkout and shows
 git's output. What git removes or refuses is git's to decide, in every state
 of the checkout, and jalon looks at none of them: a file of that name that
 is not the record, an edit that is staged, a file already gone from the
-folder, a flag set on the index, a `decisions/` that is a link.
+folder, a flag set on the index, a `decisions/` that is a link. Nor does
+`park close`, with `--replaces` or without, look at where it writes: its
+record and its index line go through a `decisions/` that is a link, wherever
+it leads.
 
 A deposit in a project's inbox folder is deleted with `rm`, once it is filed
 or set aside: jalon has no command for it.

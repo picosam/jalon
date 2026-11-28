@@ -122,6 +122,17 @@ user's word. Then:
 It files into `$repo`, the repository the related items were read from, and
 every `gh` call below names it with `--repo "$repo"` too.
 
+If `gh` itself fails while filing (the refusal then reads `gh issue create:`
+and what `gh` said) and `--parent` or `--blocked-by` was given, the issue may be filed
+all the same: `gh` files it first and sets the relation after. Look for it by
+its title before filing again, and set the relation on the issue you find.
+This is for that failure only: when jalon refused the title or the body,
+nothing was filed, and a refused title is not sent in a search either.
+
+    gh issue list --repo "$repo" --state open --search "<title> in:title"
+    gh issue edit <n> --repo "$repo" --parent <m>
+    gh issue edit <n> --repo "$repo" --add-blocked-by <m>
+
 **Nothing private reaches a public repository.** On a repository `gh repo
 view "$repo" --json visibility` does not report as `PRIVATE` (one it cannot
 read counts as public), every title, body and comment sent by hand passes the

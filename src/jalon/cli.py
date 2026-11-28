@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
                 leak.check_commits(".", args.revs)
             case "leak", "pre-push":
                 lines = sys.stdin.read()
-                leak.pre_push(args.remote, args.url, lines.splitlines())
+                leak.pre_push(args.remote, args.url, lines.split("\n"))
                 return leak.next_hook(args.remote, args.url, lines)
     except leak.Refused as refusal:
         print(f"jalon: refused: {refusal}", file=sys.stderr)
