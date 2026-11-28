@@ -291,17 +291,19 @@ def test_a_destination_not_written_as_an_address_is_scanned_without_asking(repo,
     assert calls(outside, "repo view") == []
 
 
+@pytest.mark.parametrize("other", ["other.git", "team/records "])
 @pytest.mark.parametrize("listed", [False, True])
-def test_an_address_git_would_read_as_another_holds_nothing(repo, private_list, listed):
+def test_an_address_git_would_read_as_another_holds_nothing(repo, private_list, listed, other):
     # The destination is the folder team/records. A remote of that very name leads elsewhere, to a
     # repository that holds the commit being pushed: asked by its address, git would list that one.
-    for bare in ("team/records", "other.git"):
+    # Elsewhere may differ from the address by one trailing space.
+    for bare in ("team/records", other):
         run("git", "init", "-q", "--bare", "-b", "main", repo / bare)
     run("git", "remote", "set-url", "origin", "team/records", cwd=repo)
     assert run("git", "push", "-q", "origin", "main", cwd=repo).returncode == 0
     before = remote_tip(repo)
     tip = commit(repo, "second.txt", f"written by {NAME if listed else 'someone'}\n", "the second commit")
-    run("git", "remote", "add", "team/records", "./other.git", cwd=repo)
+    run("git", "remote", "add", "team/records", other, cwd=repo)
     assert run("git", "push", "-q", "team/records", "main", cwd=repo).returncode == 0
     done = run("jalon", "push", "origin", "main", cwd=repo)
     if listed:

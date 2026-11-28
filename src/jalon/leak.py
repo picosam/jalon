@@ -178,7 +178,7 @@ def _held(repo: Path | str, url: str) -> tuple[list[str], bool]:
     which commits it already has may be scanned again. Where git would read
     `url` as another address, a remote of that name or a rewrite rule, the
     destination is not asked and holds nothing: the whole push is scanned."""
-    if _git(repo, "ls-remote", "--get-url", url).strip() != url:
+    if _git(repo, "ls-remote", "--get-url", url) != url + "\n":  # to the letter: a space more is another folder
         return [], False
     try:
         listed = _git(repo, "ls-remote", url)
